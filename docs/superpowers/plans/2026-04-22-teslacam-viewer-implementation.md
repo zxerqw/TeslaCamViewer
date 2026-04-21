@@ -6,9 +6,20 @@
 
 **Architecture:** Three-layer separation — Infrastructure (file scanning, AVFoundation playback & composition) → Domain (`@Observable` stores and use cases) → SwiftUI Views. Domain depends on Infrastructure only via protocols; the `App` entry assembles concrete implementations.
 
-**Tech Stack:** Swift 5.9+, SwiftUI, AVFoundation, XCTest, SwiftPM (no third-party deps), Xcode 15.3+ (project file created at the Xcode 15 schema level to stay compatible with Xcode 26 still reading that schema).
+**Tech Stack:** Swift 5.9+, SwiftUI, AVFoundation, XCTest, xcodegen (project generation), xcbeautify (log formatting), xcodebuild, Xcode 15.3+ / Xcode 26.
 
 **Design reference:** `docs/superpowers/specs/2026-04-22-teslacam-viewer-design.md`
+
+**Tooling prerequisites** — all already installed at `/opt/homebrew/bin/`:
+
+```bash
+which xcodegen xcbeautify xcodebuild
+# /opt/homebrew/bin/xcodegen
+# /opt/homebrew/bin/xcbeautify
+# /usr/bin/xcodebuild
+```
+
+If not present: `brew install xcodegen xcbeautify`. ffmpeg (only needed once for T7): `brew install ffmpeg`.
 
 ---
 
@@ -143,31 +154,195 @@ Tasks T2–T6 are pure Swift and have no platform dependencies — they can be c
 
 ---
 
-## Task 1: Project Scaffolding
+## Task 1: Project Scaffolding (CLI-only with xcodegen)
 
 **Files:**
-- Create: `TeslaCamViewer.xcodeproj/...` (via `xcodegen` or manually in Xcode)
+- Create: `project.yml` (xcodegen spec)
+- Create: `Makefile` (wraps xcodebuild + xcbeautify for humans and subagents)
 - Create: `TeslaCamViewer/App/TeslaCamViewerApp.swift`
+- Create: `TeslaCamViewer/Info.plist`
 - Create: `TeslaCamViewerTests/SmokeTest.swift`
-- Create: `.gitignore` additions (already committed — confirm)
-- Create: `Package.swift` (optional — we do **not** use SwiftPM for the app, but set up `xcodeproj` from Xcode GUI)
+- Create: `TeslaCamViewerTests/Info.plist`
+- Create: `.xcodegen-generated` (comment file) and make sure `TeslaCamViewer.xcodeproj/` is added to `.gitignore`
+- Generated (by xcodegen): `TeslaCamViewer.xcodeproj/`
 
-**Why this task first:** Get `xcodebuild test` working with a single smoke test so every subsequent task can run its tests.
+**Why this task first:** Get `make test` working with a single smoke test so every subsequent task has a working build loop. The whole project is CLI-driven — no Xcode GUI interaction is required for any task in this plan.
 
-- [ ] **Step 1: Create Xcode project**
+- [ ] **Step 1: Write `project.yml`**
 
-Manual steps (no CLI to automate this cleanly on macOS without `xcodegen`):
+Path: `project.yml`
 
-1. Open Xcode → File → New → Project
-2. iOS → App
-3. Product name: `TeslaCamViewer`; Team: your personal team; Organization identifier: `com.shanehou`; Interface: SwiftUI; Language: Swift; Storage: None; Include Tests: **yes**
-4. Save inside `/Users/shanehou/Developer/Projects/TeslaCamViewer/` — let Xcode create the `TeslaCamViewer/` and `TeslaCamViewerTests/` subfolders
-5. In project settings: Deployment Target = **iOS 17.0**; Supported destinations: iPhone + iPad
-6. Delete the auto-generated `ContentView.swift` (we'll own View structure)
+```yaml
+name: TeslaCamViewer
+options:
+  bundleIdPrefix: com.shanehou
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: zh-Hans
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    SWIFT_STRICT_CONCURRENCY: complete
+targets:
+  TeslaCamViewer:
+    type: application
+    platform: iOS
+    sources:
+      - path: TeslaCamViewer
+    info:
+      path: TeslaCamViewer/Info.plist
+      properties:
+        CFBundleDisplayName: TeslaCamViewer
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSPhotoLibraryAddUsageDescription: "用于把导出的行车记录仪视频保存到相册。"
+        NSPhotoLibraryUsageDescription: "用于把导出的行车记录仪视频保存到相册。"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shanehou.TeslaCamViewer
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+  TeslaCamViewerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: TeslaCamViewerTests
+    dependencies:
+      - target: TeslaCamViewer
+    info:
+      path: TeslaCamViewerTests/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shanehou.TeslaCamViewerTests
+        CODE_SIGN_STYLE: Automatic
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/TeslaCamViewer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TeslaCamViewer
+schemes:
+  TeslaCamViewer:
+    build:
+      targets:
+        TeslaCamViewer: all
+        TeslaCamViewerTests: [test]
+    test:
+      targets:
+        - TeslaCamViewerTests
+      gatherCoverageData: true
+      coverageTargets:
+        - TeslaCamViewer
+    run:
+      config: Debug
+    archive:
+      config: Release
+```
 
-- [ ] **Step 2: Replace generated `TeslaCamViewerApp.swift`**
+- [ ] **Step 2: Write the `Makefile`**
 
-Path: `TeslaCamViewer/App/TeslaCamViewerApp.swift` (move it into an `App/` group/folder first; create the folder in Finder and drag into Xcode project)
+Path: `Makefile`
+
+```makefile
+# TeslaCamViewer — CLI build harness.
+# Run `make help` for the menu.
+
+SCHEME         := TeslaCamViewer
+PROJECT        := TeslaCamViewer.xcodeproj
+SIMULATOR      := iPhone 17
+DESTINATION    := platform=iOS Simulator,name=$(SIMULATOR),OS=latest
+DERIVED_DATA   := build
+XCBEAUTIFY     := xcbeautify --renderer terminal
+
+# Tell xcodebuild to be quiet about meta-output; xcbeautify formats the rest.
+XCODEBUILD_FLAGS := -project $(PROJECT) -scheme $(SCHEME) \
+    -destination '$(DESTINATION)' -derivedDataPath $(DERIVED_DATA) \
+    COMPILER_INDEX_STORE_ENABLE=NO
+
+.PHONY: help
+help:
+	@echo "Targets:"
+	@echo "  generate   regenerate Xcode project from project.yml"
+	@echo "  build      build for the configured simulator"
+	@echo "  test       run the full test suite"
+	@echo "  test-only TESTS=Class[/method]   run a subset"
+	@echo "  clean      remove build/ and DerivedData"
+	@echo "  boot       boot the default simulator"
+	@echo "  install    install the built .app onto the booted simulator"
+	@echo "  launch     launch the installed app on the booted simulator"
+	@echo "  run        build + install + launch (end-to-end on simulator)"
+
+.PHONY: generate
+generate:
+	xcodegen generate
+
+# `generate` is cheap and idempotent; make every build step depend on it so
+# that adding a new .swift file never requires you to remember to regen.
+$(PROJECT): project.yml
+	xcodegen generate
+
+.PHONY: build
+build: $(PROJECT)
+	set -o pipefail && xcodebuild $(XCODEBUILD_FLAGS) build | $(XCBEAUTIFY)
+
+.PHONY: test
+test: $(PROJECT)
+	set -o pipefail && xcodebuild $(XCODEBUILD_FLAGS) test | $(XCBEAUTIFY)
+
+# Usage: make test-only TESTS=CameraAngleTests
+# Or:    make test-only TESTS=CameraAngleTests/test_fileSuffix_mapsEachAngleToTeslaNaming
+.PHONY: test-only
+test-only: $(PROJECT)
+	@if [ -z "$(TESTS)" ]; then echo "Set TESTS=Class or TESTS=Class/method"; exit 1; fi
+	set -o pipefail && xcodebuild $(XCODEBUILD_FLAGS) \
+	    -only-testing:TeslaCamViewerTests/$(TESTS) test | $(XCBEAUTIFY)
+
+.PHONY: clean
+clean:
+	rm -rf $(DERIVED_DATA)
+
+.PHONY: boot
+boot:
+	-xcrun simctl boot "$(SIMULATOR)" 2>/dev/null || true
+	open -a Simulator
+
+.PHONY: install
+install: build boot
+	xcrun simctl install booted $(DERIVED_DATA)/Build/Products/Debug-iphonesimulator/$(SCHEME).app
+
+.PHONY: launch
+launch:
+	xcrun simctl launch --console-pty booted com.shanehou.$(SCHEME)
+
+.PHONY: run
+run: install launch
+```
+
+- [ ] **Step 3: Write `.gitignore` additions (append to existing)**
+
+Path: `.gitignore` (the file already exists with `build/`, `DerivedData/`, etc. — add the xcodegen output):
+
+```bash
+# Append to .gitignore (preserve existing contents)
+cat >> .gitignore <<'EOF'
+
+# xcodegen-generated — regenerate with `make generate`
+TeslaCamViewer.xcodeproj/
+EOF
+```
+
+- [ ] **Step 4: Create the app entry point**
+
+Path: `TeslaCamViewer/App/TeslaCamViewerApp.swift`
 
 ```swift
 import SwiftUI
@@ -182,7 +357,7 @@ struct TeslaCamViewerApp: App {
 }
 ```
 
-- [ ] **Step 3: Write a smoke test**
+- [ ] **Step 5: Create the stub test**
 
 Path: `TeslaCamViewerTests/SmokeTest.swift`
 
@@ -196,26 +371,36 @@ final class SmokeTest: XCTestCase {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 6: Generate the Xcode project**
 
 ```bash
 cd /Users/shanehou/Developer/Projects/TeslaCamViewer
-xcodebuild test \
-  -project TeslaCamViewer.xcodeproj \
-  -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -quiet 2>&1 | tail -20
+make generate
 ```
 
-Expected last line: `** TEST SUCCEEDED **`.
+Expected stdout (last line): `Created project at <path>/TeslaCamViewer.xcodeproj`.
 
-If the simulator name `iPhone 15` is unavailable, run `xcrun simctl list devices available | grep iPhone` and substitute whatever the highest available iPhone is.
+Expected filesystem: `TeslaCamViewer.xcodeproj/` now exists and is listed in `.gitignore`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Run tests**
 
 ```bash
-git add -A
-git commit -m "chore: bootstrap TeslaCamViewer Xcode project and smoke test"
+make test
+```
+
+Expected last lines (xcbeautify output):
+```
+    Executed 1 test, with 0 failures (0 unexpected) in 0.001 (...) seconds
+Test Succeeded
+```
+
+If you instead see something like `Unable to find a device matching the provided destination`, list simulators with `xcrun simctl list devices available | grep iPhone` and adjust `SIMULATOR := iPhone 17` in the `Makefile` to an available device.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add project.yml Makefile .gitignore TeslaCamViewer/ TeslaCamViewerTests/
+git commit -m "chore: bootstrap xcodegen-driven project with smoke test"
 ```
 
 ---
@@ -285,9 +470,7 @@ final class CameraAngleTests: XCTestCase {
 - [ ] **Step 2: Run — expect failure**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -only-testing:TeslaCamViewerTests/CameraAngleTests -quiet 2>&1 | tail -15
+make test-only TESTS=CameraAngleTests 2>&1 | tail -15
 ```
 
 Expected: compile error `cannot find 'CameraAngle' in scope`.
@@ -491,9 +674,7 @@ extension JSONDecoder.DateDecodingStrategy {
 - [ ] **Step 2: Run — expect failure**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -only-testing:TeslaCamViewerTests/TeslaEventTests -quiet 2>&1 | tail -15
+make test-only TESTS=TeslaEventTests 2>&1 | tail -15
 ```
 
 Expected: `cannot find 'MinuteSegment'`, etc.
@@ -654,9 +835,7 @@ final class TrimRangeTests: XCTestCase {
 - [ ] **Step 2: Run — expect failure**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -only-testing:TeslaCamViewerTests/TrimRangeTests -quiet 2>&1 | tail -15
+make test-only TESTS=TrimRangeTests 2>&1 | tail -15
 ```
 
 - [ ] **Step 3: Implement**
@@ -1044,9 +1223,7 @@ final class FolderNameParserTests: XCTestCase {
 - [ ] **Step 2: Run — expect failure**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -only-testing:TeslaCamViewerTests/FolderNameParserTests -quiet 2>&1 | tail -10
+make test-only TESTS=FolderNameParserTests 2>&1 | tail -10
 ```
 
 - [ ] **Step 3: Implement**
@@ -1715,15 +1892,31 @@ find . -type f \( -name '*.mp4' -o -name '*.json' -o -name '*.png' -o -name '.DS
 
 Expected: you see files like `fixture-6cam-saved/TeslaCam/SavedClips/2024-07-15_14-32-01/2024-07-15_14-32-01-front.mp4`, etc.
 
-- [ ] **Step 6: Add fixtures to the test target as a resource reference**
+- [ ] **Step 6: Add the Fixtures directory as a test-target resource in `project.yml`**
 
-Manual Xcode steps:
-1. Drag `TeslaCamViewerTests/Fixtures` into the `TeslaCamViewerTests` group in Xcode
-2. In the dialog, choose **Create folder references** (blue folder icon), not groups
-3. Ensure it's checked for the `TeslaCamViewerTests` target only
-4. Verify it appears under Build Phases → Copy Bundle Resources of the test target
+Path: `project.yml` — modify the `TeslaCamViewerTests` target's `sources` block:
 
-This makes `Bundle(for: XCTestCase.self).url(forResource: "Fixtures", withExtension: nil)` resolvable at test time.
+```yaml
+  TeslaCamViewerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: TeslaCamViewerTests
+        excludes:
+          - "Fixtures/**"
+      - path: TeslaCamViewerTests/Fixtures
+        buildPhase: resources
+        type: folder          # ← copy the whole dir as a single folder reference
+```
+
+This makes `Bundle(for: XCTestCase.self).url(forResource: "Fixtures", withExtension: nil)` resolvable at test time. Regenerate the project:
+
+```bash
+make generate
+make test-only TESTS=SmokeTest 2>&1 | tail -10
+```
+
+Expected: `Test Succeeded` (smoke test still passes; fixtures now copied into the test bundle).
 
 - [ ] **Step 7: Commit**
 
@@ -1829,9 +2022,7 @@ final class TeslaCamScannerTests: XCTestCase {
 - [ ] **Step 2: Run — expect failure**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -only-testing:TeslaCamViewerTests/TeslaCamScannerTests -quiet 2>&1 | tail -15
+make test-only TESTS=TeslaCamScannerTests 2>&1 | tail -15
 ```
 
 Expected: compile errors `cannot find 'TeslaCamScanner'` and `cannot find 'ScannerProtocol'`.
@@ -2607,9 +2798,7 @@ public final class PlaybackController {
 - [ ] **Step 4: Run — expect pass**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -only-testing:TeslaCamViewerTests/MultiAVPlayerTests -quiet 2>&1 | tail -15
+make test-only TESTS=MultiAVPlayerTests 2>&1 | tail -15
 ```
 
 - [ ] **Step 5: Commit**
@@ -3070,9 +3259,7 @@ public final class AVComposer: ComposerProtocol {
 - [ ] **Step 5: Run — expect pass**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -only-testing:TeslaCamViewerTests/AVComposerTests -quiet 2>&1 | tail -20
+make test-only TESTS=AVComposerTests 2>&1 | tail -20
 ```
 
 Export is slow; this test can take up to 60s. If it flakes, use `-maximum-concurrent-test-simulator-destinations 1`.
@@ -3399,8 +3586,7 @@ struct EventListView: View {
 - [ ] **Step 4: Run — smoke test builds**
 
 ```bash
-xcodebuild build -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' -quiet 2>&1 | tail -10
+make build 2>&1 | tail -10
 ```
 
 Expected: `** BUILD SUCCEEDED **`.
@@ -4265,11 +4451,10 @@ struct TeslaCamViewerApp: App {
 - [ ] **Step 7: Build + run a full test sweep**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' -quiet 2>&1 | tail -20
+make test 2>&1 | tail -20
 ```
 
-Expected: `** TEST SUCCEEDED **` with all integration + unit tests passing.
+Expected: xcbeautify reports `Test Succeeded` with all integration + unit tests passing.
 
 - [ ] **Step 8: Commit**
 
@@ -4280,41 +4465,72 @@ git commit -m "feat(ui): wire Root, FolderPicker, Settings, ErrorBanner into ful
 
 ---
 
-## Task 17: Info.plist Keys + Entitlements
+## Task 17: Simulator Install + Launch Verification
 
-**Dependencies:** T16 (needs the app running end-to-end)
+**Dependencies:** T16
 
 **Files:**
-- Modify: `TeslaCamViewer/Info.plist` (or the `Project > General > Info` in Xcode)
+- Verify: `TeslaCamViewer/Info.plist` was regenerated by `make generate` with the Photo-library keys from `project.yml` (T1 already wrote them)
 
-- [ ] **Step 1: Add required usage descriptions**
+**Why:** Now that the app is feature-complete, exercise the full install-launch-quit loop from the CLI. We don't need to touch the project in Xcode; `make run` drives the simulator end-to-end.
 
-In Xcode → TeslaCamViewer target → Info tab → Custom iOS Target Properties:
-
-| Key | Value |
-|---|---|
-| `NSPhotoLibraryAddUsageDescription` | `用于把导出的行车记录仪视频保存到相册。` |
-| `NSPhotoLibraryUsageDescription` | `用于把导出的行车记录仪视频保存到相册。` |
-
-Also verify `UISupportedInterfaceOrientations~ipad` includes landscape (grid playback benefits from it).
-
-- [ ] **Step 2: Enable file access capability**
-
-- Signing & Capabilities → add `Files and Folders` or confirm "Open files in place" is set (this happens automatically when using `UIDocumentPickerViewController` with `asCopy: false`)
-
-- [ ] **Step 3: Manual smoke test on simulator**
-
-1. Build & Run on iPhone 15 simulator
-2. Tap "选择文件夹"
-3. Drag a fixture folder into `~/Library/Developer/CoreSimulator/.../TeslaCamViewer/Documents` via Finder, or use "Files" app in simulator to browse into Fixtures
-4. Select a `TeslaCam/` folder
-5. Verify: Saved tab shows entries, tap into one, grid plays, drag handles work, Export button opens sheet, "开始导出" produces a success banner and adds to Photos (first time triggers permission dialog)
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 1: Verify the generated Info.plist has the expected keys**
 
 ```bash
-git add -A
-git commit -m "chore: add Info.plist usage descriptions for Photos library"
+/usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryAddUsageDescription" TeslaCamViewer/Info.plist
+/usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription"    TeslaCamViewer/Info.plist
+```
+
+Expected for both: the string `用于把导出的行车记录仪视频保存到相册。`.
+
+If either prints `Does Not Exist` the project.yml was not applied — run `make generate` again.
+
+- [ ] **Step 2: Install the built app on the simulator**
+
+```bash
+make install
+```
+
+Expected: the Simulator.app opens showing the booted iPhone 17, and the app icon appears on its Home screen. (xcbeautify output ends with `Build Succeeded`, then `simctl install booted ...` prints no output on success.)
+
+- [ ] **Step 3: Launch the app with log streaming**
+
+```bash
+make launch
+```
+
+Expected: The app appears on screen, `Text("TeslaCamViewer")` placeholder (if testing a fresh build) or the real RootView (after T16) is visible. `--console-pty` streams `NSLog` / `os_log` output to the terminal. `Ctrl-C` detaches.
+
+- [ ] **Step 4: Drop a fixture folder into the simulator for interactive test**
+
+```bash
+# Copy one fixture to the shared simulator location
+FIXTURE="TeslaCamViewerTests/Fixtures/fixture-6cam-saved/TeslaCam"
+DEVICE_ID=$(xcrun simctl list devices booted | awk -F'[()]' '/iPhone/ {print $2; exit}')
+SIM_SHARED="$HOME/Library/Developer/CoreSimulator/Devices/$DEVICE_ID/data/Media/DCIM-ImportedTeslaCam"
+mkdir -p "$SIM_SHARED"
+cp -R "$FIXTURE" "$SIM_SHARED/"
+xcrun simctl openurl booted "file://$SIM_SHARED"
+echo "In the simulator's Files app, browse to the shared volume to pick TeslaCam."
+```
+
+(This step doesn't assert automatically — it prepares the environment so you can tap through the app and verify flows.)
+
+- [ ] **Step 5: Manual checklist inside the simulator**
+
+- [ ] Tap "选择文件夹" → Files app → navigate to the fixture's `TeslaCam` folder → tap to select
+- [ ] Saved tab shows one event (2024-07-15); thumbnail and time visible
+- [ ] Switch to 哨兵 and 最近 tabs → both empty (expected for this fixture)
+- [ ] Tap the Saved event → grid plays with 4 visible angles, both front/back and both repeaters
+- [ ] Drag left handle → range highlight shrinks from left
+- [ ] Drag right handle → range highlight shrinks from right
+- [ ] Tap 导出 → sheet opens, "四宫格合成" is selected → tap "开始导出"
+- [ ] First time: permission dialog for Photos → allow → export succeeds → Photos app contains the grid MP4
+
+- [ ] **Step 6: Commit if any project.yml tweaks were required**
+
+```bash
+git diff --quiet || git commit -am "chore: finalize simulator-install flow"
 ```
 
 ---
@@ -4326,12 +4542,15 @@ git commit -m "chore: add Info.plist usage descriptions for Photos library"
 - [ ] **Step 1: Run full test suite**
 
 ```bash
-xcodebuild test -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer \
-  -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-  -enableCodeCoverage YES 2>&1 | tail -30
+make test 2>&1 | tail -30
 ```
 
-Expected: All tests pass. Coverage report printed.
+Expected: xcbeautify prints `Test Succeeded`. Coverage data is gathered automatically (see `gatherCoverageData: true` in `project.yml`). To view:
+
+```bash
+xcrun xccov view --report \
+  "$(find build/Logs/Test -name '*.xcresult' | head -1)" 2>&1 | head -40
+```
 
 - [ ] **Step 2: Physical-device smoke (manual checklist)**
 
@@ -4356,19 +4575,25 @@ git status
 
 ---
 
-## Appendix: Common Xcode Command Reference
+## Appendix: Common Command Reference
 
-All commands assume `cwd = /Users/shanehou/Developer/Projects/TeslaCamViewer`.
+All commands assume `cwd = /Users/shanehou/Developer/Projects/TeslaCamViewer`. Targets come from the top-level `Makefile` created in T1.
 
 | Task | Command |
 |---|---|
-| Build only | `xcodebuild build -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' -quiet` |
-| All tests  | `xcodebuild test  -project TeslaCamViewer.xcodeproj -scheme TeslaCamViewer -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' -quiet` |
-| One test class | append `-only-testing:TeslaCamViewerTests/CLASSNAME` |
-| List available simulators | `xcrun simctl list devices available` |
-| Clean DerivedData | `rm -rf ~/Library/Developer/Xcode/DerivedData/TeslaCamViewer-*` |
+| Regenerate Xcode project | `make generate` |
+| Build only | `make build` |
+| All tests | `make test` |
+| One test class | `make test-only TESTS=CameraAngleTests` |
+| One test method | `make test-only TESTS=CameraAngleTests/test_fileSuffix_mapsEachAngleToTeslaNaming` |
+| Boot simulator | `make boot` |
+| Install .app onto booted simulator | `make install` |
+| Launch (streams logs) | `make launch` |
+| Full simulator round-trip | `make run` |
+| List available simulators | `xcrun simctl list devices available \| grep iPhone` |
+| Clean build artefacts | `make clean` |
 
-If `iPhone 15` isn't available, the commands' `-destination` value should be updated to whatever `xcrun simctl list devices available | grep iPhone` shows as the highest iPhone model.
+If `iPhone 17` isn't available in `xcrun simctl list devices available`, edit the `SIMULATOR` variable at the top of the `Makefile` to whatever is.
 
 ---
 
