@@ -2,7 +2,9 @@
 # Run `make help` for the menu.
 
 SCHEME         := TeslaCamViewer
+BUNDLE_ID      := com.shanehou.TeslaCamViewer
 PROJECT        := TeslaCamViewer.xcodeproj
+# override: make test SIMULATOR='iPhone 16 Pro'
 SIMULATOR      := iPhone 17
 DESTINATION    := platform=iOS Simulator,name=$(SIMULATOR),OS=latest
 DERIVED_DATA   := build
@@ -30,8 +32,10 @@ help:
 generate:
 	xcodegen generate
 
-# `generate` is cheap and idempotent; make every build step depend on it so
-# that adding a new .swift file never requires you to remember to regen.
+# Regenerate when project.yml changes so you don't have to remember to run
+# `make generate` after editing the spec. Note: adding new .swift files
+# still requires an explicit `make generate` — xcodegen only scans sources
+# at regen time, not on every build.
 $(PROJECT): project.yml
 	xcodegen generate
 
@@ -57,7 +61,7 @@ clean:
 
 .PHONY: boot
 boot:
-	-xcrun simctl boot "$(SIMULATOR)" 2>/dev/null || true
+	-xcrun simctl boot "$(SIMULATOR)" 2>/dev/null
 	open -a Simulator
 
 .PHONY: install
@@ -66,7 +70,7 @@ install: build boot
 
 .PHONY: launch
 launch:
-	xcrun simctl launch --console-pty booted com.shanehou.$(SCHEME)
+	xcrun simctl launch --console-pty booted $(BUNDLE_ID)
 
 .PHONY: run
 run: install launch
