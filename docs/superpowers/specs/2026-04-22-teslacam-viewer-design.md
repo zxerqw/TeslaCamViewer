@@ -21,11 +21,20 @@
 
 ### 支持的数据源
 
-| 目录 | 内容 | 支持 |
-|---|---|---|
-| `TeslaCam/SavedClips/` | 用户按喇叭主动保存的片段 | ✅ |
-| `TeslaCam/SentryClips/` | 哨兵模式触发的片段 | ✅ |
-| `TeslaCam/RecentClips/` | 最近滚动缓冲的片段（会被覆盖） | ✅ |
+| 目录 | 结构 | 事件边界 | 支持 |
+|---|---|---|---|
+| `TeslaCam/SavedClips/<time>/` | 每次触发一个子文件夹 | 文件夹即事件 | ✅ |
+| `TeslaCam/SentryClips/<time>/` | 每次触发一个子文件夹 | 文件夹即事件 | ✅ |
+| `TeslaCam/RecentClips/` | 所有分钟文件平铺（无子文件夹） | 按分钟文件的时间连续性自动分块 | ✅ |
+
+### 事件识别规则
+
+**对 `SavedClips` / `SentryClips`**：每个子文件夹 = 一个 `TeslaEvent`。子文件夹里平铺着 `YYYY-MM-DD_HH-MM-SS-{angle}.mp4` 格式的分钟文件；同时间戳的不同视角文件聚成一个 `MinuteSegment`；多个 `MinuteSegment` 按时间排序进 `TeslaEvent.segments`。典型一次触发保留触发前后共 ~3 分钟（= 3 个 `MinuteSegment`）。
+
+**对 `RecentClips`**：目录没有天然边界，需要我们分块。
+- 规则：收集所有 `MinuteSegment` 按时间排序；相邻两个 segment 的时间间隔 **≤ 阈值**（默认 **5 分钟**）算同一事件，**> 阈值**则切开为新事件
+- 阈值在**设置页**可配置（slider，范围 1–30 分钟）；调整后 **Recent Tab 的分块结果实时刷新**（`LibraryStore` 订阅设置变更，重新运行 RecentClips 的分块逻辑但不重新扫描磁盘）
+- 分出的每个块生成一个 `TeslaEvent`（`type: .recent`），id 用块内第一个 segment 的时间戳
 
 ### 支持的视角（最多 6 路）
 
@@ -76,6 +85,12 @@
 1. 导出完成后**先自动存入系统相册**（若用户授权）
 2. 随后弹出**系统分享面板**（AirDrop / 保存到文件 / 其他 App），用户可选择是否再分享一次
 3. 若相册权限被拒，跳过步骤 1 直接到步骤 2
+
+### 设置页
+
+- **Recent 分块间隔阈值**：slider，1–30 分钟，默认 5 分钟。调整时 Recent Tab 的事件列表实时重新分块（无需重扫磁盘）
+- **水印默认位置**：四角之一，默认左下（导出面板仍可临时覆盖）
+- **重新选择 TeslaCam 文件夹**：清除当前 bookmark 并触发 Document Picker
 
 ### 不在本期范围内（YAGNI）
 
@@ -160,7 +175,7 @@ struct MinuteSegment {
     let filesByAngle: [CameraAngle: URL]    // 缺失视角不出现
 }
 
-/// 一个事件 = TeslaCam 子文件夹（或 RecentClips 的展平伪事件）
+/// 一个事件 = TeslaCam 子文件夹（Saved/Sentry），或按时间连续性分块得到的逻辑事件（Recent）
 struct TeslaEvent: Identifiable {
     let id: String                          // 文件夹相对路径
     let type: EventType
@@ -201,36 +216,69 @@ struct ExportRequest {
     let range: TrimRange
     let watermarkPosition: WatermarkPosition
 }
+
+/// 用户设置（持久化到 UserDefaults）
+struct AppSettings: Codable {
+    /// RecentClips 分块阈值（秒）。相邻 MinuteSegment 间隔 > 此值则切分为新事件
+    var recentGapThresholdSeconds: Int = 300         // 默认 5 分钟；UI 范围 60..1800
+
+    /// 水印默认位置
+    var defaultWatermarkPosition: ExportRequest.WatermarkPosition = .bottomLeft
+}
 ```
 
 **设计要点**：
 
 - **`MinuteSegment` 按"时间点"而非"视角文件"组织**：跨分钟拼接变成对 segments 数组的顺序遍历，视角缺失自然表达为字典键不存在。
 - **`availableAngles` 放在事件级别**：UI 一拿到事件就知道视角选择器里该展示哪几个选项。
+- **RecentClips 事件在内存中生成**：磁盘上没有对应的"事件文件夹"，分块规则由 `AppSettings.recentGapThresholdSeconds` 驱动，变阈值只重算不重扫。
 - **时间分层**：事件级用 `Date`（显示、排序），播放/导出用 `CMTime`（精确到 `AVFoundation` 时间基准）。
 
 ## 5. 关键流程数据流
 
 ### 流程 A · 扫描 U 盘
 
+扫描分两阶段：**原始扫描**（读磁盘）和**分块**（纯内存计算）。分块阶段吃设置里的 Recent 阈值参数，设置变更时只重跑分块，不重扫磁盘。
+
 ```
 用户点 "选择 TeslaCam 文件夹"
   → UIDocumentPicker (folder mode)
   → 用户在 Files 里选 U 盘上的 TeslaCam
   → 获得 security-scoped URL，保存 bookmark 到 UserDefaults
-  → TeslaCamScanner.scan(folder:)
-      ├─ 枚举 RecentClips/*.mp4（展平成单个"最近"伪事件）
-      ├─ 枚举 SavedClips/*/
-      └─ 枚举 SentryClips/*/
-        每个子文件夹：
-          - 解析文件夹名 → 起始 Date
-          - glob *.mp4 → 按正则解析文件名
-          - 同时间戳下不同视角聚成一个 MinuteSegment
-          - 读 event.json（若有）
-          - 读 thumb.png（若有）
-  → 发射 [TeslaEvent]，按 startTime 倒序
-  → LibraryStore.events 更新
-  → SwiftUI List 渲染（按 Tab 筛选）
+  → TeslaCamScanner.scan(folder:)            ← 阶段 1：磁盘 I/O
+      │
+      ├─ SavedClips/*/                       每个子文件夹一个事件
+      │   对每个子文件夹：
+      │     - 解析文件夹名 → startTime
+      │     - glob *.mp4 → 按 "YYYY-MM-DD_HH-MM-SS-{angle}.mp4" 解析
+      │     - 同一时间戳下不同视角聚为一个 MinuteSegment
+      │     - 读 event.json / thumb.png（若有）
+      │     - 输出 TeslaEvent(type: .saved)
+      │
+      ├─ SentryClips/*/                      同上，type: .sentry
+      │
+      └─ RecentClips/                        需要分块
+          - glob *.mp4 → 解析所有分钟文件
+          - 同时间戳聚为 MinuteSegment
+          - 输出未分块的 [MinuteSegment]（按时间排序）
+      ↓
+  阶段 2：分块（纯内存，吃 Settings.recentGapThreshold）
+      │
+      └─ RecentClips 的 [MinuteSegment] 按相邻间隔扫描：
+          - 间隔 ≤ 阈值 → 并入当前块
+          - 间隔 > 阈值 → 关闭当前块、开始新块
+          每个块转成 TeslaEvent(type: .recent, id: 块首 segment 时间戳)
+      ↓
+  发射合并后的 [TeslaEvent]，按 startTime 倒序
+      ↓
+  LibraryStore.events 更新
+      ↓
+  SwiftUI List 渲染（按 Tab 筛选）
+
+[设置页] 用户调整 Recent 阈值
+  → LibraryStore 订阅 Settings 变更
+  → 只重跑阶段 2（分块），保留阶段 1 原始扫描结果
+  → events 更新 → UI 实时刷新
 ```
 
 ### 流程 B · 网格播放 & 修剪
@@ -351,9 +399,11 @@ UI 层用统一的 `ErrorBanner` / `ErrorAlert` 组件消费 `AppError`，避免
 - 文件名解析：`"2024-07-15_14-32-01-front.mp4"` → `(Date, CameraAngle)`
 - 文件夹名解析：`"2024-07-15_14-32-01"` → `Date`
 - `MinuteSegment` 聚合：给 `(Date, CameraAngle, URL)` 元组集合，正确输出 `[MinuteSegment]`
+- **RecentClips 分块**：给 `[MinuteSegment]` 和阈值，验证分块边界正确（无缝 → 合一；跨阈值 → 切开；边界值 `=` 阈值的归属）
 - `availableAngles` 并集计算
 - `TrimRange` 边界（手柄不越过彼此、不出事件时长）
 - `AppError` 本地化文案
+- `AppSettings` 持久化往返
 
 ### 集成测试（Scanner + 真实 Fixture）
 
@@ -362,7 +412,8 @@ UI 层用统一的 `ErrorBanner` / `ErrorAlert` 组件消费 `AppError`，避免
 - `fixture-6cam-saved/` — 新车 6 路，1 个 SavedClip，3 个 MinuteSegment
 - `fixture-4cam-sentry/` — 老车 4 路，2 个 SentryClip
 - `fixture-corrupted/` — 损坏 JSON、缺视角、重复时间戳
-- `fixture-recent/` — 只 RecentClips 展平片段
+- `fixture-recent-continuous/` — RecentClips 连续的 5 分钟分钟文件（应分为 1 个事件）
+- `fixture-recent-gapped/` — RecentClips 两段分钟文件间有 10 分钟空窗（5 分钟阈值下应分为 2 个事件，30 分钟阈值下应合为 1 个）
 
 MP4 用 `ffmpeg -f lavfi -i testsrc -t 5 ...` 生成的 5 秒小文件，checked in。
 
@@ -411,8 +462,9 @@ MP4 用 `ffmpeg -f lavfi -i testsrc -t 5 ...` 生成的 5 秒小文件，checked
 TeslaCamViewer/
 ├── App/                           # App 入口、根 View
 ├── Domain/
-│   ├── Models/                    # CameraAngle, TeslaEvent, MinuteSegment, ...
-│   ├── LibraryStore.swift
+│   ├── Models/                    # CameraAngle, TeslaEvent, MinuteSegment, AppSettings, ...
+│   ├── LibraryStore.swift         # 含 RecentClips 分块逻辑
+│   ├── SettingsStore.swift        # AppSettings + UserDefaults 持久化
 │   ├── PlaybackController.swift
 │   └── ExportJob.swift
 ├── Infrastructure/
@@ -424,7 +476,8 @@ TeslaCamViewer/
 │   ├── EventList/
 │   ├── GridPlayer/
 │   ├── GridConfig/
-│   └── ExportSheet/
+│   ├── ExportSheet/
+│   └── Settings/                  # 设置页，含 Recent 阈值 slider
 ├── UI/                            # 共享组件（ErrorBanner, TrimBar, ...）
 └── Resources/                     # Localizable, Assets
 Tests/
