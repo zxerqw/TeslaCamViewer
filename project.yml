@@ -47,6 +47,11 @@ targets:
     platform: iOS
     sources:
       - path: TeslaCamViewerTests
+        excludes:
+          - "Fixtures/**"
+      - path: TeslaCamViewerTests/Fixtures
+        buildPhase: resources
+        type: folder
     dependencies:
       - target: TeslaCamViewer
     info:
