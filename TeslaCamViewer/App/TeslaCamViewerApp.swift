@@ -2,9 +2,9 @@ import SwiftUI
 
 @main
 struct TeslaCamViewerApp: App {
+    @State private var deps = AppDependencies()
+
     var body: some Scene {
-        WindowGroup {
-            Text("TeslaCamViewer")
-        }
+        WindowGroup { RootView(deps: deps) }
     }
 }

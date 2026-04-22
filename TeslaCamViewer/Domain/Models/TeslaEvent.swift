@@ -1,7 +1,7 @@
 import Foundation
 import CoreMedia
 
-public struct TeslaEvent: Identifiable, Equatable {
+public struct TeslaEvent: Identifiable, Equatable, Hashable {
     public let id: String
     public let type: EventType
     public let startTime: Date
@@ -30,5 +30,10 @@ public struct TeslaEvent: Identifiable, Equatable {
 
     public var totalDuration: CMTime {
         segments.reduce(CMTime.zero) { acc, seg in acc + seg.duration }
+    }
+
+    // MARK: - Hashable (id-based; Equatable is also id-based via `==` below)
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 }
