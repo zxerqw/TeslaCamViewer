@@ -27,3 +27,6 @@ Package.resolved
 
 # Pods (not used, but keep for safety)
 Pods/
+
+# xcodegen-generated — regenerate with `make generate`
+TeslaCamViewer.xcodeproj/
