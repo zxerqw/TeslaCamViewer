@@ -175,7 +175,7 @@ Path: `project.yml`
 ```yaml
 name: TeslaCamViewer
 options:
-  bundleIdPrefix: com.shanehou
+  bundleIdPrefix: me.melkor
   deploymentTarget:
     iOS: "17.0"
   developmentLanguage: zh-Hans
@@ -212,7 +212,7 @@ targets:
         NSPhotoLibraryUsageDescription: "用于把导出的行车记录仪视频保存到相册。"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.shanehou.TeslaCamViewer
+        PRODUCT_BUNDLE_IDENTIFIER: me.melkor.TeslaCamViewer
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
   TeslaCamViewerTests:
@@ -226,7 +226,7 @@ targets:
       path: TeslaCamViewerTests/Info.plist
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.shanehou.TeslaCamViewerTests
+        PRODUCT_BUNDLE_IDENTIFIER: me.melkor.TeslaCamViewerTests
         CODE_SIGN_STYLE: Automatic
         BUNDLE_LOADER: $(TEST_HOST)
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/TeslaCamViewer.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TeslaCamViewer
@@ -321,7 +321,7 @@ install: build boot
 
 .PHONY: launch
 launch:
-	xcrun simctl launch --console-pty booted com.shanehou.$(SCHEME)
+	xcrun simctl launch --console-pty booted me.melkor.$(SCHEME)
 
 .PHONY: run
 run: install launch

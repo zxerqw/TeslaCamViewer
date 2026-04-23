@@ -30,6 +30,3 @@ Pods/
 
 # xcodegen-generated — regenerate with `make generate`
 TeslaCamViewer.xcodeproj/
-
-# Per-developer device-signing config (DEVELOPMENT_TEAM, DEVICE_ID) — see Makefile
-.env.local

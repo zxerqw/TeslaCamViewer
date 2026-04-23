@@ -2,7 +2,7 @@
 # Run `make help` for the menu.
 
 SCHEME         := TeslaCamViewer
-BUNDLE_ID      := com.shanehou.TeslaCamViewer
+BUNDLE_ID      := me.melkor.TeslaCamViewer
 PROJECT        := TeslaCamViewer.xcodeproj
 # override: make test SIMULATOR='iPhone 16 Pro'
 SIMULATOR      := iPhone 17
@@ -16,27 +16,12 @@ XCODEBUILD_FLAGS := -project $(PROJECT) -scheme $(SCHEME) \
     COMPILER_INDEX_STORE_ENABLE=NO
 
 # --- Device (physical iPhone/iPad) ---
-#
-# Device installs require code signing, which needs a DEVELOPMENT_TEAM.
-# Team IDs are per-developer so we don't hardcode one in project.yml.
-# Two ways to provide it (in priority order):
-#
-#   1. Environment variable:     DEVELOPMENT_TEAM=ABCDE12345 make install-device
-#   2. .env.local file (gitignored):
-#        echo 'DEVELOPMENT_TEAM=ABCDE12345' > .env.local
-#        echo 'DEVICE_ID=Shanes-iPhone'   >> .env.local   # optional; name or UUID
-#
-# Find your Team ID at https://developer.apple.com/account → Membership.
--include .env.local
-
+# DEVELOPMENT_TEAM + CODE_SIGN_STYLE live in project.yml (Team IDs are public).
+# -allowProvisioningUpdates lets Xcode auto-create profiles on fresh machines.
 DEVICE_DESTINATION := generic/platform=iOS
-# -allowProvisioningUpdates lets Xcode create/refresh provisioning profiles
-# on our behalf when they're missing — needed on fresh machines or new Team IDs.
 DEVICE_BUILD_FLAGS := -project $(PROJECT) -scheme $(SCHEME) \
     -destination '$(DEVICE_DESTINATION)' -derivedDataPath $(DERIVED_DATA) \
     -allowProvisioningUpdates \
-    CODE_SIGN_STYLE=Automatic \
-    DEVELOPMENT_TEAM=$(DEVELOPMENT_TEAM) \
     COMPILER_INDEX_STORE_ENABLE=NO
 DEVICE_APP_PATH    := $(DERIVED_DATA)/Build/Products/Debug-iphoneos/$(SCHEME).app
 
@@ -55,14 +40,13 @@ help:
 	@echo ""
 	@echo "Device targets (connected iPhone/iPad):"
 	@echo "  list-devices         list connected devices (names/UUIDs for DEVICE_ID)"
-	@echo "  build-device         build for physical device (needs DEVELOPMENT_TEAM)"
+	@echo "  build-device         build for physical device"
 	@echo "  install-device       install .app onto the connected device"
 	@echo "  launch-device        launch the installed app on the device (streams logs)"
 	@echo "  run-device           install + launch (device)"
 	@echo ""
-	@echo "Device setup:"
-	@echo "  export DEVELOPMENT_TEAM=ABCDE12345    # or put in .env.local"
-	@echo "  export DEVICE_ID='Shanes iPhone'      # optional; name or UUID"
+	@echo "Device selection (optional):"
+	@echo "  export DEVICE_ID='Shanes iPhone'    # name or UUID; default = first available"
 
 .PHONY: generate
 generate:
@@ -118,8 +102,8 @@ list-devices:
 	@xcrun devicectl list devices 2>/dev/null | grep -v "Apple Watch" | \
 	    awk 'NR==1 || /available/ { print }'
 
-# Resolve DEVICE_ID at command time:
-#   1. $(DEVICE_ID) from env or .env.local
+# Resolve the target device at command time:
+#   1. $(DEVICE_ID) from the environment (name or UUID)
 #   2. otherwise, pick the first non-Watch available device
 DEVICE_LOOKUP = $(shell \
     if [ -n "$(DEVICE_ID)" ]; then \
@@ -130,16 +114,6 @@ DEVICE_LOOKUP = $(shell \
                 for (i=NF; i>=1; i--) if ($$i ~ /^[0-9A-F-]{36}$$/) { print $$i; exit } \
             }'; \
     fi)
-
-.PHONY: _check-device-env
-_check-device-env:
-	@if [ -z "$(DEVELOPMENT_TEAM)" ]; then \
-	    echo "error: DEVELOPMENT_TEAM not set."; \
-	    echo "  Put it in .env.local (echo 'DEVELOPMENT_TEAM=ABCDE12345' > .env.local)"; \
-	    echo "  or export it: export DEVELOPMENT_TEAM=ABCDE12345"; \
-	    echo "  Find your Team ID at https://developer.apple.com/account → Membership."; \
-	    exit 1; \
-	fi
 
 .PHONY: _check-device-connected
 _check-device-connected:
@@ -153,11 +127,11 @@ _check-device-connected:
 	echo "Using device: $$dev"
 
 .PHONY: build-device
-build-device: _check-device-env $(PROJECT)
+build-device: $(PROJECT)
 	set -o pipefail && xcodebuild $(DEVICE_BUILD_FLAGS) build | $(XCBEAUTIFY)
 
 .PHONY: install-device
-install-device: _check-device-env _check-device-connected build-device
+install-device: _check-device-connected build-device
 	xcrun devicectl device install app \
 	    --device "$(DEVICE_LOOKUP)" \
 	    "$(DEVICE_APP_PATH)"
