@@ -7,7 +7,8 @@ final class FolderNameParserTests: XCTestCase {
         let result = FolderNameParser.parse("2024-07-15_14-32-01")
         XCTAssertNotNil(result)
         let cal = Calendar(identifier: .gregorian)
-        let comps = cal.dateComponents(in: TimeZone(secondsFromGMT: 0)!, from: result!)
+        // Tesla stores local time — verify components match in the current timezone.
+        let comps = cal.dateComponents(in: .current, from: result!)
         XCTAssertEqual(comps.year, 2024)
         XCTAssertEqual(comps.month, 7)
         XCTAssertEqual(comps.day, 15)

@@ -37,14 +37,24 @@ public final class ExportJob {
             case .singlesPerAngle(let angles):
                 for (i, angle) in angles.enumerated() {
                     let url = tempDir.appendingPathComponent("tcv-\(UUID().uuidString)-\(angle.fileSuffix).mp4")
-                    try await composer.exportSingleAngle(angle, request: request, to: url)
+                    let base = Double(i) / Double(angles.count)
+                    let span = 1.0 / Double(angles.count)
+                    try await composer.exportSingleAngle(angle, request: request, to: url) { [weak self] p in
+                        Task { @MainActor [weak self] in
+                            self?.progress = base + Double(p) * span
+                        }
+                    }
                     outs.append(url)
                     progress = Double(i + 1) / Double(angles.count)
                 }
 
             case .gridCombined:
                 let url = tempDir.appendingPathComponent("tcv-\(UUID().uuidString)-grid.mp4")
-                try await composer.exportGrid(request: request, to: url)
+                try await composer.exportGrid(request: request, to: url) { [weak self] p in
+                    Task { @MainActor [weak self] in
+                        self?.progress = Double(p)
+                    }
+                }
                 outs.append(url)
                 progress = 1.0
             }

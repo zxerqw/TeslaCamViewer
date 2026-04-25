@@ -7,6 +7,8 @@ struct GridPlayerView: View {
 
     @State private var trimStart: CMTime = .zero
     @State private var trimEnd: CMTime   = CMTime(seconds: 1, preferredTimescale: 600)
+    /// When non-nil, a single angle is shown full-screen instead of the 2×2 grid.
+    @State private var focusedAngle: CameraAngle?
 
     var body: some View {
         VStack(spacing: 8) {
@@ -37,11 +39,34 @@ struct GridPlayerView: View {
 
     private var gridView: some View {
         GeometryReader { geo in
-            let cellW = geo.size.width / 2
-            let cellH = geo.size.height / 2
-            ZStack {
-                ForEach(Array(viewModel.gridAngles.enumerated()), id: \.offset) { idx, angle in
-                    cell(for: angle, index: idx, size: CGSize(width: cellW, height: cellH))
+            if let focused = focusedAngle {
+                // Single-angle full view — tap to return to grid
+                Group {
+                    if viewModel.event.availableAngles.contains(focused),
+                       let player = viewModel.playback.player(for: focused) {
+                        PlayerLayerView(player: player)
+                    } else {
+                        MissingAngleView(angleName: angleLabel(focused))
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .overlay(alignment: .topLeading) {
+                    Text(angleLabel(focused))
+                        .font(.caption2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.black.opacity(0.6)).foregroundStyle(.white)
+                        .cornerRadius(4)
+                        .padding(8)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { focusedAngle = nil }
+            } else {
+                let cellW = geo.size.width / 2
+                let cellH = geo.size.height / 2
+                ZStack {
+                    ForEach(Array(viewModel.gridAngles.enumerated()), id: \.offset) { idx, angle in
+                        cell(for: angle, index: idx, size: CGSize(width: cellW, height: cellH))
+                    }
                 }
             }
         }
@@ -73,6 +98,8 @@ struct GridPlayerView: View {
                 .position(x: CGFloat(col) * size.width + 40,
                           y: CGFloat(row) * size.height + 14)
         }
+        .contentShape(Rectangle())
+        .onTapGesture { focusedAngle = angle }
     }
 
     private var controls: some View {

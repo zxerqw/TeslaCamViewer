@@ -111,7 +111,8 @@ public final class TeslaCamScanner: ScannerProtocol, @unchecked Sendable {
         let f2 = DateFormatter()
         f2.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         f2.locale = Locale(identifier: "en_US_POSIX")
-        f2.timeZone = TimeZone(secondsFromGMT: 0)
+        // Tesla event.json timestamps are local time without timezone info.
+        f2.timeZone = .current
         if let d = f2.date(from: str) { return d }
         throw DecodingError.dataCorruptedError(
             in: try decoder.singleValueContainer(),

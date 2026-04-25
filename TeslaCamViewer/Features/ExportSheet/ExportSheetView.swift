@@ -36,7 +36,13 @@ struct ExportSheetView: View {
                     }
                 }
                 if viewModel.isRunning {
-                    ProgressView("导出中…")
+                    Section {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("导出中… \(Int(viewModel.progress * 100))%")
+                            ProgressView(value: viewModel.progress, total: 1.0)
+                                .progressViewStyle(.linear)
+                        }
+                    }
                 } else if !viewModel.resultURLs.isEmpty {
                     Section("完成") {
                         Text("已保存到相册（若有权限）。点击下方按钮再分享一次。")

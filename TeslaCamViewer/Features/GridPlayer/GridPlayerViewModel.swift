@@ -17,12 +17,14 @@ final class GridPlayerViewModel {
     }
 
     func load() async {
-        try? await playback.load(event: event, angles: gridAngles)
+        // Load ALL available angles so the user can freely switch
+        // grid cells to any angle (including B-pillar) without a reload.
+        let allAvailable = Array(event.availableAngles)
+        try? await playback.load(event: event, angles: allAvailable)
     }
 
     func setAngle(_ angle: CameraAngle, at index: Int) {
         guard (0..<gridAngles.count).contains(index) else { return }
         gridAngles[index] = angle
-        Task { await load() }
     }
 }

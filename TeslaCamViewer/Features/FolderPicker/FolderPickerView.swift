@@ -9,6 +9,8 @@ struct FolderPickerView: UIViewControllerRepresentable {
         let vc = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
         vc.allowsMultipleSelection = false
         vc.delegate = context.coordinator
+        // Start at the root so USB drives are immediately visible.
+        vc.directoryURL = URL(filePath: "/", directoryHint: .isDirectory)
         return vc
     }
 

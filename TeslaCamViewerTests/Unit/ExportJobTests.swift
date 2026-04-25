@@ -9,16 +9,18 @@ final class ExportJobTests: XCTestCase {
         var gridCalls: [URL] = []
         var shouldFail: Error?
 
-        func exportSingleAngle(_ angle: CameraAngle, request: ExportRequest, to url: URL) async throws {
+        func exportSingleAngle(_ angle: CameraAngle, request: ExportRequest, to url: URL, progress: @escaping @Sendable (Float) -> Void) async throws {
             if let e = shouldFail { throw e }
             singleCalls.append((angle, url))
             FileManager.default.createFile(atPath: url.path, contents: Data([0x00]))
+            progress(1.0)
         }
 
-        func exportGrid(request: ExportRequest, to url: URL) async throws {
+        func exportGrid(request: ExportRequest, to url: URL, progress: @escaping @Sendable (Float) -> Void) async throws {
             if let e = shouldFail { throw e }
             gridCalls.append(url)
             FileManager.default.createFile(atPath: url.path, contents: Data([0x00]))
+            progress(1.0)
         }
     }
 

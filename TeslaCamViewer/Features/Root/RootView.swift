@@ -7,7 +7,6 @@ struct RootView: View {
     @State private var isPickingFolder = false
     @State private var error: AppError?
     @State private var selected: TeslaEvent?
-    @State private var showExport = false
     @State private var gridVM: GridPlayerViewModel?
     @State private var exportVM: ExportSheetViewModel?
     @State private var showSettings = false
@@ -73,7 +72,6 @@ struct RootView: View {
                         defaultWatermark: deps.settings.settings.defaultWatermarkPosition,
                         exportJob: deps.exportJob
                     )
-                    showExport = true
                 })
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -87,10 +85,8 @@ struct RootView: View {
                         onDismiss: { showGridConfig = false }
                     )
                 }
-                .sheet(isPresented: $showExport) {
-                    if let evm = exportVM {
-                        ExportSheetView(viewModel: evm, onDismiss: { showExport = false })
-                    }
+                .sheet(item: $exportVM) { evm in
+                    ExportSheetView(viewModel: evm, onDismiss: { exportVM = nil })
                 }
             } else {
                 ProgressView().task {

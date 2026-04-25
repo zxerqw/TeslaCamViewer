@@ -14,11 +14,11 @@ extension JSONDecoder.DateDecodingStrategy {
         compact.formatOptions = [.withInternetDateTime]
         if let d = compact.date(from: str) { return d }
 
-        // Fallback: "yyyy-MM-dd'T'HH:mm:ss" without timezone — treat as UTC.
+        // Fallback: "yyyy-MM-dd'T'HH:mm:ss" without timezone — Tesla stores local time.
         let naive = DateFormatter()
         naive.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         naive.locale = Locale(identifier: "en_US_POSIX")
-        naive.timeZone = TimeZone(secondsFromGMT: 0)
+        naive.timeZone = .current
         if let d = naive.date(from: str) { return d }
 
         throw DecodingError.dataCorruptedError(

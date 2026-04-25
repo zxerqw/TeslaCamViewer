@@ -4,7 +4,8 @@ import CoreMedia
 
 @Observable
 @MainActor
-final class ExportSheetViewModel {
+final class ExportSheetViewModel: Identifiable {
+    let id = UUID()
     enum Mode: String, CaseIterable, Identifiable {
         case grid, singles
         var id: String { rawValue }
@@ -17,6 +18,9 @@ final class ExportSheetViewModel {
     var isRunning = false
     var resultURLs: [URL] = []
     var error: AppError?
+
+    /// Export progress from 0.0 to 1.0, driven by ExportJob.
+    var progress: Double { exportJob.progress }
 
     @ObservationIgnored let event: TeslaEvent
     @ObservationIgnored let gridAngles: [CameraAngle]

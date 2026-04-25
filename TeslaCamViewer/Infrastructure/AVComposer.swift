@@ -9,7 +9,7 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
 
     // MARK: Single angle
 
-    public func exportSingleAngle(_ angle: CameraAngle, request: ExportRequest, to url: URL) async throws {
+    public func exportSingleAngle(_ angle: CameraAngle, request: ExportRequest, to url: URL, progress: @escaping @Sendable (Float) -> Void) async throws {
         let (composition, videoComp, renderSize) = try await singleAngleComposition(
             request: request, angle: angle
         )
@@ -23,13 +23,14 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 eventStart: request.event.startTime,
                 rangeStart: request.range.start
             ),
-            to: url
+            to: url,
+            progress: progress
         )
     }
 
     // MARK: Grid
 
-    public func exportGrid(request: ExportRequest, to url: URL) async throws {
+    public func exportGrid(request: ExportRequest, to url: URL, progress: @escaping @Sendable (Float) -> Void) async throws {
         guard case .gridCombined(let angles) = request.layout, angles.count == 4 else {
             throw AppError.exportFailed(underlying: NSError(
                 domain: "AVComposer", code: 1,
@@ -49,7 +50,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 eventStart: request.event.startTime,
                 rangeStart: request.range.start
             ),
-            to: url
+            to: url,
+            progress: progress
         )
     }
 
@@ -171,16 +173,22 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
             }
 
             // Scale and position into 1/4 cell.
-            let scale = max(cellW / nativeSize.width, cellH / nativeSize.height)
-            let scaled = CGSize(width: nativeSize.width * scale, height: nativeSize.height * scale)
+            // AVMutableVideoCompositionLayerInstruction transforms are applied to
+            // the source video frame: first scale it down, then translate to the
+            // correct cell position. Build the transform in the correct order:
+            // T(offset) * S(scale) means "scale at origin, then move into place".
+            let scaleF = min(cellW / nativeSize.width, cellH / nativeSize.height)
+            let scaled = CGSize(width: nativeSize.width * scaleF, height: nativeSize.height * scaleF)
             let row = idx / 2, col = idx % 2   // 0=TL, 1=TR, 2=BL, 3=BR
             let cellX = CGFloat(col) * cellW
             let cellY = CGFloat(row) * cellH
             let offsetX = cellX + (cellW - scaled.width) / 2
             let offsetY = cellY + (cellH - scaled.height) / 2
 
-            let t = CGAffineTransform(translationX: offsetX, y: offsetY)
-                .scaledBy(x: scale, y: scale)
+            // CGAffineTransform concatenation: a.concatenating(b) = "apply a then b".
+            // We want: scale at origin → translate to cell position.
+            let t = CGAffineTransform(scaleX: scaleF, y: scaleF)
+                .concatenating(CGAffineTransform(translationX: offsetX, y: offsetY))
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
             layer.setTransform(t, at: .zero)
             layerInstrs.append(layer)
@@ -212,7 +220,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         videoComposition: AVMutableVideoComposition,
         renderSize: CGSize,
         watermarkBakeInfo info: WatermarkBakeInfo,
-        to url: URL
+        to url: URL,
+        progress: @escaping @Sendable (Float) -> Void
     ) async throws {
         // AVVideoCompositionCoreAnimationTool uses OpenGL ES + IOSurface via XPC, which crashes
         // on the iOS simulator due to an XPC sandbox violation (_xpc_api_misuse / _ioSurfaceClientCreate).
@@ -234,10 +243,22 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         session.videoComposition = videoComposition
         session.shouldOptimizeForNetworkUse = true
 
+        // Poll AVAssetExportSession.progress while exporting.
+        let pollTask = Task.detached {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 250_000_000) // 0.25s
+                let p = session.progress  // 0.0 – 1.0
+                progress(p)
+            }
+        }
+
         // iOS 18+ has async export(); fall back to the callback API for iOS 17 compat.
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             session.exportAsynchronously { cont.resume() }
         }
+        pollTask.cancel()
+        progress(1.0)
+
         if session.status != .completed {
             throw AppError.exportFailed(underlying: session.error ?? NSError(domain: "AVComposer", code: 3))
         }
@@ -249,47 +270,71 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         renderSize: CGSize,
         info: WatermarkBakeInfo
     ) {
+        // AVVideoCompositionCoreAnimationTool overlays a CALayer tree onto the
+        // rendered video. The CALayer coordinate system is standard CoreAnimation:
+        //   • Origin at BOTTOM-LEFT, Y increases UPWARD.
+        //   • Y=0 is the bottom of the video, Y=renderSize.height is the top.
+        //
+        // This is DIFFERENT from the video composition transform coordinate
+        // system (which is top-left origin). Do not confuse the two.
+        //
+        // Constraints:
+        //  • Do NOT use isGeometryFlipped or sublayerTransform flips.
+        //  • CATextLayer.string is NOT animatable — use per-second layers
+        //    with opacity animation instead.
+
         let parent = CALayer()
         parent.frame = CGRect(origin: .zero, size: renderSize)
+
         let videoLayer = CALayer()
         videoLayer.frame = parent.frame
         parent.addSublayer(videoLayer)
 
-        // Timestamp layer — animated via keyframes over the full duration.
-        // CATextLayer.font must be a CTFont (CFTypeRef), not UIFont — passing UIFont causes SIGTRAP.
-        let timestamp = CATextLayer()
-        timestamp.font = CTFontCreateWithName("Helvetica-Bold" as CFString, 24, nil)
-        timestamp.fontSize = 24
-        timestamp.foregroundColor = UIColor.white.cgColor
-        timestamp.shadowColor = UIColor.black.cgColor
-        timestamp.shadowOpacity = 0.9
-        timestamp.shadowRadius = 3
-        timestamp.alignmentMode = .left
-        timestamp.contentsScale = UIScreen.main.scale
-        timestamp.frame = timestampFrame(renderSize: renderSize, position: info.position)
-        parent.addSublayer(timestamp)
-
-        let totalSeconds = Int(videoComposition.instructions.first?.timeRange.duration.seconds ?? 0)
-        var values: [String] = []
-        var keyTimes: [NSNumber] = []
+        // ── Dynamic timestamp (one text layer per second, opacity-animated) ──
+        let tsFrame = timestampFrame(renderSize: renderSize, position: info.position)
+        let totalDur = videoComposition.instructions.first?.timeRange.duration.seconds ?? 0
+        let totalSeconds = Int(totalDur)
         let base = info.eventStart.addingTimeInterval(info.rangeStart.seconds)
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        for sec in 0...max(1, totalSeconds) {
-            values.append(df.string(from: base.addingTimeInterval(TimeInterval(sec))))
-            let frac = totalSeconds > 0 ? Double(sec) / Double(totalSeconds) : 0
-            keyTimes.append(NSNumber(value: frac))
-        }
-        let anim = CAKeyframeAnimation(keyPath: "string")
-        anim.values = values
-        anim.keyTimes = keyTimes
-        anim.calculationMode = .discrete
-        anim.duration = max(1, Double(totalSeconds))
-        anim.isRemovedOnCompletion = false
-        anim.beginTime = AVCoreAnimationBeginTimeAtZero
-        timestamp.add(anim, forKey: "timestamp")
-        timestamp.string = values.first ?? ""
+        let scale = UIScreen.main.scale
 
+        for sec in 0...max(0, totalSeconds) {
+            let textLayer = CATextLayer()
+            textLayer.string = df.string(from: base.addingTimeInterval(TimeInterval(sec)))
+            textLayer.font = CTFontCreateWithName("Helvetica-Bold" as CFString, 24, nil)
+            textLayer.fontSize = 24
+            textLayer.foregroundColor = UIColor.white.cgColor
+            textLayer.shadowColor = UIColor.black.cgColor
+            textLayer.shadowOpacity = 0.9
+            textLayer.shadowRadius = 3
+            textLayer.alignmentMode = .left
+            textLayer.contentsScale = scale
+            textLayer.frame = tsFrame
+            textLayer.opacity = 0
+
+            let tStart = totalDur > 0 ? Double(sec) / totalDur : 0
+            let tEnd   = totalDur > 0 ? min(1.0, Double(sec + 1) / totalDur) : 1
+            let anim = CAKeyframeAnimation(keyPath: "opacity")
+            anim.values   = [0, 1, 0, 0] as [NSNumber]
+            anim.keyTimes = [
+                0,
+                NSNumber(value: tStart),
+                NSNumber(value: tEnd),
+                1,
+            ]
+            anim.duration = max(1, totalDur)
+            anim.calculationMode = .discrete
+            anim.isRemovedOnCompletion = false
+            anim.beginTime = AVCoreAnimationBeginTimeAtZero
+            textLayer.add(anim, forKey: "show")
+
+            parent.addSublayer(textLayer)
+        }
+
+        // ── Per-cell angle labels (grid mode only) ──
+        // CA coords: Y=0 bottom, Y=height top.
+        // Video grid: row 0 = top of video (high Y in CA), row 1 = bottom (low Y in CA).
         if case .grid(let angles) = info.layoutKind {
             let cellW = renderSize.width / 2
             let cellH = renderSize.height / 2
@@ -302,11 +347,18 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 label.shadowColor = UIColor.black.cgColor
                 label.shadowOpacity = 0.9
                 label.shadowRadius = 3
-                label.contentsScale = UIScreen.main.scale
+                label.contentsScale = scale
+
                 let row = idx / 2, col = idx % 2
                 let x = CGFloat(col) * cellW + 12
-                let y = renderSize.height - CGFloat(row) * cellH - 32
-                label.frame = CGRect(x: x, y: y, width: 180, height: 24)
+                // Each cell's top edge in CA Y coords:
+                //   row 0 (top video row): CA top edge = renderSize.height
+                //   row 1 (bottom video row): CA top edge = cellH
+                // Place label just below the cell's top edge.
+                let labelH: CGFloat = 24
+                let cellTopCA = renderSize.height - CGFloat(row) * cellH
+                let y = cellTopCA - labelH - 8
+                label.frame = CGRect(x: x, y: y, width: 180, height: labelH)
                 parent.addSublayer(label)
             }
         }
@@ -316,6 +368,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         )
     }
 
+    /// Timestamp position in CA coordinates (origin bottom-left, Y up).
+    /// bottomLeft = low Y (near bottom), topLeft = high Y (near top).
     private func timestampFrame(renderSize: CGSize, position: ExportRequest.WatermarkPosition) -> CGRect {
         let w: CGFloat = 320, h: CGFloat = 28, pad: CGFloat = 16
         switch position {

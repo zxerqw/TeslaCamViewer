@@ -23,7 +23,8 @@ public enum FilenameParser {
 
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        f.timeZone = TimeZone(secondsFromGMT: 0)
+        // Tesla stores local time in filenames — parse as local (system) timezone.
+        f.timeZone = .current
         f.locale = Locale(identifier: "en_US_POSIX")
         guard let ts = f.date(from: tsPart) else { return nil }
         return ParsedFile(timestamp: ts, angle: angle)

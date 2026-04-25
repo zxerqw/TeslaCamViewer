@@ -19,10 +19,12 @@ final class FilenameParserTests: XCTestCase {
         }
     }
 
-    func test_timestamp_matchesUTC() {
+    func test_timestamp_matchesLocalTime() {
         let parsed = FilenameParser.parse("2024-07-15_14-32-01-front.mp4")!
         let cal = Calendar(identifier: .gregorian)
-        let comps = cal.dateComponents(in: TimeZone(secondsFromGMT: 0)!, from: parsed.timestamp)
+        // Tesla stores local time — verify components match in the current timezone.
+        let comps = cal.dateComponents(in: .current, from: parsed.timestamp)
+        XCTAssertEqual(comps.hour, 14)
         XCTAssertEqual(comps.minute, 32)
         XCTAssertEqual(comps.second, 1)
     }

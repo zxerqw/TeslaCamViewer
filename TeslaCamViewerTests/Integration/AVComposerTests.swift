@@ -29,7 +29,7 @@ final class AVComposerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: outURL) }
 
         let composer = AVComposer()
-        try await composer.exportSingleAngle(.front, request: request, to: outURL)
+        try await composer.exportSingleAngle(.front, request: request, to: outURL, progress: { _ in })
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: outURL.path))
         let asset = AVURLAsset(url: outURL)
@@ -51,7 +51,7 @@ final class AVComposerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: outURL) }
 
         let composer = AVComposer()
-        try await composer.exportGrid(request: request, to: outURL)
+        try await composer.exportGrid(request: request, to: outURL, progress: { _ in })
 
         let asset = AVURLAsset(url: outURL)
         let track = try await asset.loadTracks(withMediaType: .video).first
