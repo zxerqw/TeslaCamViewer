@@ -7,60 +7,108 @@ struct ExportSheetView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("布局") {
-                    Picker("布局", selection: $viewModel.mode) {
-                        ForEach(ExportSheetViewModel.Mode.allCases) { Text($0.label).tag($0) }
-                    }.pickerStyle(.segmented)
-                }
-                if viewModel.mode == .singles {
-                    Section("选择视角") {
-                        ForEach(CameraAngle.allCases, id: \.self) { a in
-                            Toggle(label(a), isOn: Binding(
-                                get: { viewModel.selectedAngles.contains(a) },
-                                set: { on in
-                                    if on { viewModel.selectedAngles.insert(a) }
-                                    else  { viewModel.selectedAngles.remove(a) }
-                                })
-                            )
-                            .disabled(!viewModel.event.availableAngles.contains(a))
+            VStack(spacing: 0) {
+                Form {
+                    Section("布局") {
+                        Picker("布局", selection: $viewModel.mode) {
+                            ForEach(ExportSheetViewModel.Mode.allCases) { Text($0.label).tag($0) }
+                        }.pickerStyle(.segmented)
+                    }
+                    if viewModel.mode == .singles {
+                        Section("选择视角") {
+                            ForEach(CameraAngle.allCases, id: \.self) { a in
+                                Toggle(label(a), isOn: Binding(
+                                    get: { viewModel.selectedAngles.contains(a) },
+                                    set: { on in
+                                        if on { viewModel.selectedAngles.insert(a) }
+                                        else  { viewModel.selectedAngles.remove(a) }
+                                    })
+                                )
+                                .disabled(!viewModel.event.availableAngles.contains(a))
+                            }
                         }
                     }
-                }
-                Section("水印") {
-                    Picker("位置", selection: $viewModel.watermarkPosition) {
-                        Text("左下").tag(ExportRequest.WatermarkPosition.bottomLeft)
-                        Text("右下").tag(ExportRequest.WatermarkPosition.bottomRight)
-                        Text("左上").tag(ExportRequest.WatermarkPosition.topLeft)
-                        Text("右上").tag(ExportRequest.WatermarkPosition.topRight)
-                    }
-                }
-                if viewModel.isRunning {
-                    Section {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("导出中… \(Int(viewModel.progress * 100))%")
-                            ProgressView(value: viewModel.progress, total: 1.0)
-                                .progressViewStyle(.linear)
+                    Section("水印") {
+                        Picker("位置", selection: $viewModel.watermarkPosition) {
+                            Text("左下").tag(ExportRequest.WatermarkPosition.bottomLeft)
+                            Text("右下").tag(ExportRequest.WatermarkPosition.bottomRight)
+                            Text("左上").tag(ExportRequest.WatermarkPosition.topLeft)
+                            Text("右上").tag(ExportRequest.WatermarkPosition.topRight)
                         }
                     }
-                } else if !viewModel.resultURLs.isEmpty {
-                    Section("完成") {
-                        Text("已保存到相册（若有权限）。点击下方按钮再分享一次。")
-                        Button("分享") { present(urls: viewModel.resultURLs) }
+                    if viewModel.isRunning {
+                        Section {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("导出中… \(Int(viewModel.progress * 100))%")
+                                ProgressView(value: viewModel.progress, total: 1.0)
+                                    .progressViewStyle(.linear)
+                            }
+                        }
+                    }
+                    if !viewModel.resultURLs.isEmpty {
+                        Section("完成") {
+                            if viewModel.savedToLibrary {
+                                Label("已保存到相册", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            } else if viewModel.error == .photoLibraryDenied {
+                                Label("保存到相册失败，请在设置中允许访问相册", systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                    if let err = viewModel.error, err != .photoLibraryDenied {
+                        Section { Text(err.errorDescription ?? "导出失败").foregroundStyle(.red) }
                     }
                 }
-                if let err = viewModel.error {
-                    Section { Text(err.errorDescription ?? "导出失败").foregroundStyle(.red) }
+
+                // Bottom action button area
+                VStack(spacing: 12) {
+                    Divider()
+                    bottomButton
+                        .padding(.horizontal)
+                        .padding(.bottom, 16)
                 }
+                .background(Color(.systemGroupedBackground))
             }
             .navigationTitle("导出")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭", action: onDismiss) }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("开始导出") { Task { await viewModel.run() } }
-                        .disabled(viewModel.isRunning)
-                }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var bottomButton: some View {
+        if !viewModel.resultURLs.isEmpty {
+            // Export succeeded → share button
+            Button {
+                present(urls: viewModel.resultURLs)
+            } label: {
+                Label("分享", systemImage: "square.and.arrow.up")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        } else {
+            // Not yet exported, or failed → export / retry button
+            Button {
+                Task { await viewModel.run() }
+            } label: {
+                Group {
+                    if viewModel.isRunning {
+                        Label("导出中…", systemImage: "arrow.triangle.2.circlepath")
+                    } else if viewModel.error != nil {
+                        Label("重新导出", systemImage: "arrow.clockwise")
+                    } else {
+                        Label("开始导出", systemImage: "square.and.arrow.down")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(viewModel.isRunning)
         }
     }
 

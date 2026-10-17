@@ -18,6 +18,8 @@ final class ExportSheetViewModel: Identifiable {
     var isRunning = false
     var resultURLs: [URL] = []
     var error: AppError?
+    /// Whether the video was successfully saved to the photo library.
+    var savedToLibrary = false
 
     /// Export progress from 0.0 to 1.0, driven by ExportJob.
     var progress: Double { exportJob.progress }
@@ -44,6 +46,8 @@ final class ExportSheetViewModel: Identifiable {
 
     func run() async {
         isRunning = true
+        error = nil
+        savedToLibrary = false
         defer { isRunning = false }
         let layout: ExportRequest.Layout = switch mode {
         case .grid:    .gridCombined(angles: gridAngles)
@@ -53,8 +57,21 @@ final class ExportSheetViewModel: Identifiable {
         do {
             let result = try await exportJob.run(request)
             resultURLs = result.outputURLs
+
+            // Attempt to save to photo library and report any errors
+            var saveErrors: [Error] = []
             for u in resultURLs {
-                try? await PhotoLibrarySaver.save(u)
+                do {
+                    try await PhotoLibrarySaver.save(u)
+                } catch {
+                    saveErrors.append(error)
+                }
+            }
+            if saveErrors.isEmpty {
+                savedToLibrary = true
+            } else {
+                // Export succeeded but save to library failed — report but keep resultURLs for sharing
+                self.error = .photoLibraryDenied
             }
         } catch let e as AppError {
             error = e

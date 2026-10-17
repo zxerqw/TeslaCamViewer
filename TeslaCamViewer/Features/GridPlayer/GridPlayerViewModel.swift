@@ -9,11 +9,13 @@ final class GridPlayerViewModel {
     let event: TeslaEvent
     let playback: PlaybackController
     var gridAngles: [CameraAngle]
+    var watermarkPosition: ExportRequest.WatermarkPosition
 
-    init(event: TeslaEvent, playback: PlaybackController) {
+    init(event: TeslaEvent, playback: PlaybackController, defaultWatermark: ExportRequest.WatermarkPosition = .bottomLeft) {
         self.event = event
         self.playback = playback
         self.gridAngles = CameraAngle.defaultGrid
+        self.watermarkPosition = defaultWatermark
     }
 
     func load() async {

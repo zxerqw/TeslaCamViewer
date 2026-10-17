@@ -37,13 +37,23 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "gridCombined requires exactly 4 angles"]
             ))
         }
+        // Detect native video size from the first available angle to avoid black bars.
+        // Cap grid render size to max 1920 width to ensure smooth playback.
+        let info = await detectNativeVideoInfo(event: request.event, angles: angles)
+        let rawW = info.size.width * 2
+        let rawH = info.size.height * 2
+        let maxWidth: CGFloat = 1920
+        let scaleFactor = rawW > maxWidth ? maxWidth / rawW : 1.0
+        let renderSize = CGSize(width: (rawW * scaleFactor).rounded(.down),
+                                height: (rawH * scaleFactor).rounded(.down))
+        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(info.frameRate))
         let (composition, videoComp) = try await gridComposition(
-            request: request, angles: angles, renderSize: CGSize(width: 1920, height: 1080)
+            request: request, angles: angles, renderSize: renderSize, frameDuration: frameDuration
         )
         try await runExport(
             composition: composition,
             videoComposition: videoComp,
-            renderSize: CGSize(width: 1920, height: 1080),
+            renderSize: renderSize,
             watermarkBakeInfo: .init(
                 position: request.watermarkPosition,
                 layoutKind: .grid(angles: angles),
@@ -53,6 +63,28 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
             to: url,
             progress: progress
         )
+    }
+
+    private struct NativeVideoInfo {
+        let size: CGSize
+        let frameRate: Float  // e.g. 36.0
+    }
+
+    /// Detect native video size and frame rate from the first available video track.
+    private func detectNativeVideoInfo(event: TeslaEvent, angles: [CameraAngle]) async -> NativeVideoInfo {
+        for angle in angles {
+            for seg in event.segments {
+                guard let u = seg.filesByAngle[angle] else { continue }
+                let asset = AVURLAsset(url: u)
+                if let vt = try? await asset.loadTracks(withMediaType: .video).first,
+                   let sz = try? await vt.load(.naturalSize),
+                   sz.width > 0, sz.height > 0 {
+                    let rate = (try? await vt.load(.nominalFrameRate)) ?? 36
+                    return NativeVideoInfo(size: sz, frameRate: rate > 0 ? rate : 36)
+                }
+            }
+        }
+        return NativeVideoInfo(size: CGSize(width: 1280, height: 960), frameRate: 36)
     }
 
     // MARK: - single angle helpers
@@ -68,6 +100,7 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         var eventCursor: CMTime = .zero
         var compositionCursor: CMTime = .zero
         var renderSize = CGSize(width: 1280, height: 960)
+        var detectedFrameRate: Float = 36
 
         for seg in request.event.segments {
             let segStart = eventCursor
@@ -98,6 +131,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 )
                 let sz = try await vt.load(.naturalSize)
                 if sz.width > 0, sz.height > 0 { renderSize = sz }
+                let rate = (try? await vt.load(.nominalFrameRate)) ?? 0
+                if rate > 0 { detectedFrameRate = rate }
                 compositionCursor = compositionCursor + insertDuration
             } catch {
                 compositionCursor = compositionCursor + (overlapEnd - overlapStart)
@@ -106,7 +141,7 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
 
         let videoComp = AVMutableVideoComposition()
         videoComp.renderSize = renderSize
-        videoComp.frameDuration = CMTime(value: 1, timescale: 30)
+        videoComp.frameDuration = CMTime(value: 1, timescale: CMTimeScale(detectedFrameRate))
 
         let instr = AVMutableVideoCompositionInstruction()
         instr.timeRange = CMTimeRange(start: .zero, duration: trimDuration)
@@ -122,7 +157,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
     private func gridComposition(
         request: ExportRequest,
         angles: [CameraAngle],
-        renderSize: CGSize
+        renderSize: CGSize,
+        frameDuration: CMTime = CMTime(value: 1, timescale: 36)
     ) async throws -> (AVMutableComposition, AVMutableVideoComposition) {
         let comp = AVMutableComposition()
         let cellW = renderSize.width / 2
@@ -196,7 +232,7 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
 
         let videoComp = AVMutableVideoComposition()
         videoComp.renderSize = renderSize
-        videoComp.frameDuration = CMTime(value: 1, timescale: 30)
+        videoComp.frameDuration = frameDuration
         let instr = AVMutableVideoCompositionInstruction()
         instr.timeRange = CMTimeRange(start: .zero, duration: trimDuration)
         instr.layerInstructions = layerInstrs
@@ -291,7 +327,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         parent.addSublayer(videoLayer)
 
         // ── Dynamic timestamp (one text layer per second, opacity-animated) ──
-        let tsFrame = timestampFrame(renderSize: renderSize, position: info.position)
+        let tsFontSize: CGFloat = max(28, renderSize.width * 0.022)
+        let tsFrame = timestampFrame(renderSize: renderSize, position: info.position, fontSize: tsFontSize)
         let totalDur = videoComposition.instructions.first?.timeRange.duration.seconds ?? 0
         let totalSeconds = Int(totalDur)
         let base = info.eventStart.addingTimeInterval(info.rangeStart.seconds)
@@ -302,8 +339,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         for sec in 0...max(0, totalSeconds) {
             let textLayer = CATextLayer()
             textLayer.string = df.string(from: base.addingTimeInterval(TimeInterval(sec)))
-            textLayer.font = CTFontCreateWithName("Helvetica-Bold" as CFString, 24, nil)
-            textLayer.fontSize = 24
+            textLayer.font = CTFontCreateWithName("Helvetica-Bold" as CFString, tsFontSize, nil)
+            textLayer.fontSize = tsFontSize
             textLayer.foregroundColor = UIColor.white.cgColor
             textLayer.shadowColor = UIColor.black.cgColor
             textLayer.shadowOpacity = 0.9
@@ -335,14 +372,22 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         // ── Per-cell angle labels (grid mode only) ──
         // CA coords: Y=0 bottom, Y=height top.
         // Video grid: row 0 = top of video (high Y in CA), row 1 = bottom (low Y in CA).
+        // Labels positioned toward the center of the grid to avoid watermark overlap:
+        //   cell 0 (TL) → bottom-right of cell
+        //   cell 1 (TR) → bottom-left of cell
+        //   cell 2 (BL) → top-right of cell
+        //   cell 3 (BR) → top-left of cell
         if case .grid(let angles) = info.layoutKind {
             let cellW = renderSize.width / 2
             let cellH = renderSize.height / 2
+            let labelFontSize: CGFloat = max(28, renderSize.width * 0.018)
+            let labelH: CGFloat = labelFontSize + 8
+            let labelPad: CGFloat = 12
             for (idx, angle) in angles.enumerated() {
                 let label = CATextLayer()
                 label.string = angleLabel(angle)
-                label.font = CTFontCreateWithName("Helvetica" as CFString, 20, nil)
-                label.fontSize = 20
+                label.font = CTFontCreateWithName("Helvetica-Bold" as CFString, labelFontSize, nil)
+                label.fontSize = labelFontSize
                 label.foregroundColor = UIColor.white.cgColor
                 label.shadowColor = UIColor.black.cgColor
                 label.shadowOpacity = 0.9
@@ -350,15 +395,33 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 label.contentsScale = scale
 
                 let row = idx / 2, col = idx % 2
-                let x = CGFloat(col) * cellW + 12
-                // Each cell's top edge in CA Y coords:
-                //   row 0 (top video row): CA top edge = renderSize.height
-                //   row 1 (bottom video row): CA top edge = cellH
-                // Place label just below the cell's top edge.
-                let labelH: CGFloat = 24
-                let cellTopCA = renderSize.height - CGFloat(row) * cellH
-                let y = cellTopCA - labelH - 8
-                label.frame = CGRect(x: x, y: y, width: 180, height: labelH)
+                let labelW: CGFloat = 200
+
+                // X position: cell 0,2 (left col) → right side; cell 1,3 (right col) → left side
+                let x: CGFloat
+                if col == 0 {
+                    // Left column → label on right side of cell (toward center)
+                    x = cellW - labelW - labelPad
+                    label.alignmentMode = .right
+                } else {
+                    // Right column → label on left side of cell (toward center)
+                    x = cellW + labelPad
+                    label.alignmentMode = .left
+                }
+
+                // Y position (CA coords: Y=0 bottom, Y=height top):
+                //   row 0 (top video row) → label at bottom of cell (toward center)
+                //   row 1 (bottom video row) → label at top of cell (toward center)
+                let y: CGFloat
+                if row == 0 {
+                    // Top row → label at bottom of cell (low CA Y = near center divider)
+                    y = cellH + labelPad
+                } else {
+                    // Bottom row → label at top of cell (high CA Y = near center divider)
+                    y = cellH - labelH - labelPad
+                }
+
+                label.frame = CGRect(x: x, y: y, width: labelW, height: labelH)
                 parent.addSublayer(label)
             }
         }
@@ -370,8 +433,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
 
     /// Timestamp position in CA coordinates (origin bottom-left, Y up).
     /// bottomLeft = low Y (near bottom), topLeft = high Y (near top).
-    private func timestampFrame(renderSize: CGSize, position: ExportRequest.WatermarkPosition) -> CGRect {
-        let w: CGFloat = 320, h: CGFloat = 28, pad: CGFloat = 16
+    private func timestampFrame(renderSize: CGSize, position: ExportRequest.WatermarkPosition, fontSize: CGFloat = 42) -> CGRect {
+        let w: CGFloat = fontSize * 14, h: CGFloat = fontSize + 8, pad: CGFloat = 20
         switch position {
         case .bottomLeft:  return CGRect(x: pad, y: pad, width: w, height: h)
         case .bottomRight: return CGRect(x: renderSize.width - w - pad, y: pad, width: w, height: h)
@@ -382,12 +445,12 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
 
     private func angleLabel(_ a: CameraAngle) -> String {
         switch a {
-        case .front: return "前 Front"
-        case .back: return "后 Back"
-        case .leftRepeater: return "左后 L-Rep"
-        case .rightRepeater: return "右后 R-Rep"
-        case .leftPillar: return "左柱 L-Pil"
-        case .rightPillar: return "右柱 R-Pil"
+        case .front: return "前"
+        case .back: return "后"
+        case .leftRepeater: return "左后视镜"
+        case .rightRepeater: return "右后视镜"
+        case .leftPillar: return "左B柱"
+        case .rightPillar: return "右B柱"
         }
     }
 }

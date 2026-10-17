@@ -69,7 +69,7 @@ struct RootView: View {
                         event: event,
                         gridAngles: gvm.gridAngles,
                         trim: gvm.playback.trim,
-                        defaultWatermark: deps.settings.settings.defaultWatermarkPosition,
+                        defaultWatermark: gvm.watermarkPosition,
                         exportJob: deps.exportJob
                     )
                 })
@@ -90,7 +90,11 @@ struct RootView: View {
                 }
             } else {
                 ProgressView().task {
-                    gridVM = GridPlayerViewModel(event: event, playback: deps.playback)
+                    gridVM = GridPlayerViewModel(
+                        event: event,
+                        playback: deps.playback,
+                        defaultWatermark: deps.settings.settings.defaultWatermarkPosition
+                    )
                 }
             }
         }

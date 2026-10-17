@@ -41,7 +41,7 @@ struct TrimBarView: View {
                     .position(x: (startX + endX) / 2, y: trimY)
 
                 // Playhead vertical line (extends from trim row down to scrub handle)
-                Rectangle().fill(.white)
+                Rectangle().fill(Color.accentColor)
                     .frame(width: 2, height: playheadHandleY - trimY + 16)
                     .position(x: currX, y: (trimY + playheadHandleY + 6) / 2)
 
@@ -103,7 +103,7 @@ struct TrimBarView: View {
     private var playheadHandle: some View {
         Image(systemName: "arrowtriangle.down.fill")
             .font(.system(size: 16))
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.accentColor)
             .shadow(radius: 2)
     }
 }
