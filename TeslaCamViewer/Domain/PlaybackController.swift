@@ -10,6 +10,7 @@ public final class PlaybackController {
     public private(set) var currentTime: CMTime = .zero
     public private(set) var isPlaying: Bool = false
     public private(set) var loadedAngles: [CameraAngle] = []
+    public private(set) var segmentStartTimes: [CMTime] = []
     public private(set) var trim: TrimRange = TrimRange(
         start: .zero,
         end: .init(seconds: 1, preferredTimescale: 600),
@@ -27,6 +28,7 @@ public final class PlaybackController {
         try await player.load(event: event, angles: angles)
         totalDuration = player.totalDuration
         loadedAngles = player.loadedAngles
+        segmentStartTimes = player.segmentStartTimes
         trim = TrimRange.fullRange(totalDuration: totalDuration)
         attachTimeObserver()
     }

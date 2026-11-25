@@ -15,4 +15,12 @@ public protocol PlayerProtocol: AnyObject {
 
     /// SwiftUI needs to show per-angle AVPlayerLayers. The view layer will ask for these players.
     func player(for angle: CameraAngle) -> AVPlayer?
+
+    /// Start time of each minute segment on the playback timeline, using the
+    /// real clip durations. Empty when unknown.
+    var segmentStartTimes: [CMTime] { get }
+}
+
+public extension PlayerProtocol {
+    var segmentStartTimes: [CMTime] { [] }
 }

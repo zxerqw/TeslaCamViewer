@@ -230,7 +230,29 @@ struct GridPlayerView: View {
             } label: {
                 Image(systemName: "goforward.5")
             }
+            if let sentryTime = sentryEventTime {
+                Button {
+                    Task { try? await viewModel.playback.seek(to: sentryTime) }
+                } label: {
+                    VStack(spacing: 1) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                        Text("哨兵").font(.caption2)
+                    }
+                    .foregroundStyle(.red)
+                }
+                .accessibilityLabel("跳转至哨兵触发时刻")
+            }
         }
+    }
+
+    /// Timeline position of the moment that triggered this Sentry event
+    /// (a few seconds early so the lead-up is visible). Nil when unavailable.
+    private var sentryEventTime: CMTime? {
+        SentryEventLocator.eventTime(
+            for: viewModel.event,
+            segmentStartTimes: viewModel.playback.segmentStartTimes,
+            totalDuration: viewModel.playback.totalDuration
+        )
     }
 
     private func angleLabel(_ a: CameraAngle) -> String {

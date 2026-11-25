@@ -12,6 +12,8 @@ public final class MultiAVPlayer: PlayerProtocol, @unchecked Sendable {
         playersByAngle.values.first?.timeControlStatus == .playing
     }
 
+    public private(set) var segmentStartTimes: [CMTime] = []
+
     private var playersByAngle: [CameraAngle: AVPlayer] = [:]
 
     public init() {}
@@ -21,6 +23,7 @@ public final class MultiAVPlayer: PlayerProtocol, @unchecked Sendable {
 
         let angles = requested.filter { event.availableAngles.contains($0) }
         var players: [CameraAngle: AVPlayer] = [:]
+        var startsByAngle: [CameraAngle: [CMTime]] = [:]
 
         for angle in angles {
             let comp = AVMutableComposition()
@@ -29,7 +32,9 @@ public final class MultiAVPlayer: PlayerProtocol, @unchecked Sendable {
                 preferredTrackID: kCMPersistentTrackID_Invalid
             )!
             var cursor: CMTime = .zero
+            var starts: [CMTime] = []
             for seg in event.segments {
+                starts.append(cursor)
                 guard let url = seg.filesByAngle[angle] else {
                     // Leave a gap of `seg.duration` so playhead stays aligned with other angles.
                     cursor = cursor + seg.duration
@@ -46,6 +51,7 @@ public final class MultiAVPlayer: PlayerProtocol, @unchecked Sendable {
                     cursor = cursor + seg.duration   // skip broken file, keep alignment
                 }
             }
+            startsByAngle[angle] = starts
             let item = AVPlayerItem(asset: comp)
             let player = AVPlayer(playerItem: item)
             player.automaticallyWaitsToMinimizeStalling = false
@@ -55,6 +61,8 @@ public final class MultiAVPlayer: PlayerProtocol, @unchecked Sendable {
 
         playersByAngle = players
         loadedAngles = angles
+        // Same angle that drives the playhead observer in PlaybackController.
+        segmentStartTimes = angles.first.flatMap { startsByAngle[$0] } ?? []
         totalDuration = event.totalDuration
     }
 
@@ -85,6 +93,7 @@ public final class MultiAVPlayer: PlayerProtocol, @unchecked Sendable {
         playersByAngle.values.forEach { $0.pause() }
         playersByAngle.removeAll()
         loadedAngles.removeAll()
+        segmentStartTimes.removeAll()
         totalDuration = .zero
     }
 }
