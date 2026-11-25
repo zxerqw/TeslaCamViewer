@@ -28,11 +28,14 @@ public struct ExportRequest {
     public let layout: Layout
     public let range: TrimRange
     public let watermarkPosition: WatermarkPosition
+    /// When set, speed / G-force text is burned into the exported video.
+    public let telemetry: TelemetryTrack?
 
-    public init(event: TeslaEvent, layout: Layout, range: TrimRange, watermarkPosition: WatermarkPosition) {
+    public init(event: TeslaEvent, layout: Layout, range: TrimRange, watermarkPosition: WatermarkPosition, telemetry: TelemetryTrack? = nil) {
         self.event = event
         self.layout = layout
         self.range = range
         self.watermarkPosition = watermarkPosition
+        self.telemetry = telemetry
     }
 }

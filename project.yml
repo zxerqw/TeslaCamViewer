@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    MARKETING_VERSION: "0.8.0"
-    CURRENT_PROJECT_VERSION: "9"
+    MARKETING_VERSION: "0.9.0"
+    CURRENT_PROJECT_VERSION: "10"
     ENABLE_USER_SCRIPT_SANDBOXING: NO  # xcodegen emits run-script phases that write into DerivedData
     SWIFT_STRICT_CONCURRENCY: complete
     # Code signing — applies to all targets. Team ID is public (visible in any

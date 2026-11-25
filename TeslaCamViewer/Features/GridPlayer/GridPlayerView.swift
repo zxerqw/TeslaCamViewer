@@ -21,6 +21,7 @@ struct GridPlayerView: View {
                     VStack(spacing: 8) {
                         controls
                         layoutPicker
+                        telemetryToggle
                         watermarkPicker
                         TrimBarView(
                             totalDuration: viewModel.playback.totalDuration,
@@ -34,8 +35,7 @@ struct GridPlayerView: View {
                         )
                         .padding(.horizontal, 8)
 
-                        Button("导出", action: onExportTap)
-                            .buttonStyle(.borderedProminent)
+                        exportButtons
                             .padding(.bottom, 8)
                     }
                     .frame(width: min(220, geo.size.width * 0.28))
@@ -49,6 +49,7 @@ struct GridPlayerView: View {
                     VStack(spacing: 8) {
                         controls
                         layoutPicker
+                        telemetryToggle
                         watermarkPicker
                         TrimBarView(
                             totalDuration: viewModel.playback.totalDuration,
@@ -62,8 +63,7 @@ struct GridPlayerView: View {
                         )
                         .padding(.horizontal)
 
-                        Button("导出", action: onExportTap)
-                            .buttonStyle(.borderedProminent)
+                        exportButtons
                             .padding(.bottom, 8)
                     }
                     .padding(.top, 8)
@@ -71,7 +71,14 @@ struct GridPlayerView: View {
                 }
             }
         }
-        .task { await viewModel.load() }
+        .task {
+            await viewModel.load()
+            // Sentry: open zoomed in on the camera that fired the event.
+            if focusedAngle == nil, let a = viewModel.sentryTriggerAngle {
+                focusedAngle = a
+            }
+            await viewModel.loadTelemetry()
+        }
         .onChange(of: viewModel.playback.totalDuration) { _, newTotal in
             trimStart = .zero
             trimEnd = newTotal
@@ -163,6 +170,7 @@ struct GridPlayerView: View {
                         .padding(8)
                 }
                 .overlay { watermarkOverlay(size: geo.size) }
+                .overlay(alignment: telemetryAlignment) { telemetryHUD(size: geo.size) }
                 .contentShape(Rectangle())
                 .onTapGesture { focusedAngle = nil }
             } else {
@@ -176,6 +184,7 @@ struct GridPlayerView: View {
                     }
                 }
                 .overlay { watermarkOverlay(size: geo.size) }
+                .overlay(alignment: telemetryAlignment) { telemetryHUD(size: geo.size) }
             }
         }
         .clipped()
@@ -252,6 +261,7 @@ struct GridPlayerView: View {
             if let sentryTime = sentryEventTime {
                 Button {
                     Task {
+                        if let a = viewModel.sentryTriggerAngle { focusedAngle = a }
                         try? await viewModel.playback.seek(to: sentryTime)
                         viewModel.playback.play()
                     }
@@ -275,6 +285,124 @@ struct GridPlayerView: View {
             segmentStartTimes: viewModel.playback.segmentStartTimes,
             totalDuration: viewModel.playback.totalDuration
         )
+    }
+
+    @ViewBuilder
+    private var telemetryToggle: some View {
+        if let track = viewModel.telemetry {
+            if track.isEmpty {
+                Text("此视频无车速/G值数据")
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else {
+                Toggle("显示车速/G值", isOn: $viewModel.showTelemetry)
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+            }
+        } else {
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini)
+                Text("读取车速数据…").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Export buttons
+
+    private var exportButtons: some View {
+        VStack(spacing: 6) {
+            if let trigger = viewModel.sentryTriggerTime {
+                Button {
+                    let total = viewModel.playback.totalDuration
+                    let s = max(0, trigger.seconds - 10)
+                    let e = min(total.seconds, trigger.seconds + 10)
+                    trimStart = CMTime(seconds: s, preferredTimescale: 600)
+                    trimEnd = CMTime(seconds: e, preferredTimescale: 600)
+                    viewModel.playback.setTrim(start: trimStart, end: trimEnd)
+                    onExportTap()
+                } label: {
+                    Label("导出事件前后10秒", systemImage: "scissors")
+                        .font(.footnote)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+            }
+            Button("导出", action: onExportTap)
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    // MARK: - Telemetry HUD (speed / G)
+
+    private var telemetryAlignment: Alignment {
+        // Opposite vertical edge from the watermark so they never overlap.
+        switch viewModel.watermarkPosition {
+        case .bottomLeft, .bottomRight: return .top
+        case .topLeft, .topRight: return .bottom
+        }
+    }
+
+    @ViewBuilder
+    private func telemetryHUD(size: CGSize) -> some View {
+        if viewModel.showTelemetry, let track = viewModel.telemetry, !track.isEmpty,
+           let s = track.sample(at: viewModel.playback.currentTime.seconds) {
+            let base = max(10, min(15, size.width * 0.024))
+            HStack(alignment: .center, spacing: 10) {
+                VStack(spacing: 0) {
+                    Text("\(Int(s.speedKph.rounded()))")
+                        .font(.system(size: base * 2, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                    Text("km/h").font(.system(size: base * 0.7))
+                }
+                Text(s.gear.rawValue)
+                    .font(.system(size: base * 1.3, weight: .heavy, design: .rounded))
+                    .foregroundStyle(s.gear == .D ? Color.green : (s.gear == .R ? Color.orange : Color.white))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(String(format: "纵向 %+.2fG", s.gLongitudinal))
+                        .foregroundStyle(gColor(s.gLongitudinal))
+                    Text(String(format: "横向 %+.2fG", s.gLateral))
+                        .foregroundStyle(gColor(s.gLateral))
+                }
+                .font(.system(size: base * 0.85, weight: .semibold, design: .monospaced))
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.left").opacity(s.blinkerLeft ? 1 : 0.25)
+                            .foregroundStyle(s.blinkerLeft ? Color.green : Color.white)
+                        Image(systemName: "arrow.right").opacity(s.blinkerRight ? 1 : 0.25)
+                            .foregroundStyle(s.blinkerRight ? Color.green : Color.white)
+                    }
+                    HStack(spacing: 4) {
+                        Text("刹").foregroundStyle(s.brake ? Color.red : Color.white.opacity(0.3))
+                        Text("油\(Int(s.throttlePct.rounded()))%")
+                            .foregroundStyle(s.throttlePct > 1 ? Color.green : Color.white.opacity(0.4))
+                    }
+                    if let ap = autopilotLabel(s.autopilot) {
+                        Text(ap).foregroundStyle(.cyan)
+                    }
+                }
+                .font(.system(size: base * 0.75, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+            .padding(6)
+            .allowsHitTesting(false)
+        }
+    }
+
+    private func gColor(_ g: Double) -> Color {
+        let a = abs(g)
+        if a >= 0.5 { return .red }
+        if a >= 0.25 { return .orange }
+        return .white
+    }
+
+    private func autopilotLabel(_ a: TelemetrySample.Autopilot) -> String? {
+        switch a {
+        case .fsd: return "FSD"
+        case .autosteer: return "AP"
+        case .tacc: return "TACC"
+        case .none: return nil
+        }
     }
 
     private func angleLabel(_ a: CameraAngle) -> String {

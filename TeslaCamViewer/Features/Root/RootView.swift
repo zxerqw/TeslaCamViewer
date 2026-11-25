@@ -74,7 +74,8 @@ struct RootView: View {
                         gridAngles: gvm.gridAngles,
                         trim: gvm.playback.trim,
                         defaultWatermark: gvm.watermarkPosition,
-                        exportJob: deps.exportJob
+                        exportJob: deps.exportJob,
+                        telemetry: gvm.telemetry
                     )
                 })
                 .toolbar {

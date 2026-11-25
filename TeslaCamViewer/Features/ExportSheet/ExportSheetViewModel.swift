@@ -20,6 +20,9 @@ final class ExportSheetViewModel: Identifiable {
     var error: AppError?
     /// Whether the video was successfully saved to the photo library.
     var savedToLibrary = false
+    /// Burn speed / G-force into the video (only offered when telemetry exists).
+    var burnTelemetry = true
+    var hasTelemetry: Bool { !(telemetry?.isEmpty ?? true) }
 
     /// Export progress from 0.0 to 1.0, driven by ExportJob.
     var progress: Double { exportJob.progress }
@@ -28,14 +31,17 @@ final class ExportSheetViewModel: Identifiable {
     @ObservationIgnored let gridAngles: [CameraAngle]
     @ObservationIgnored let trim: TrimRange
     @ObservationIgnored private let exportJob: ExportJob
+    @ObservationIgnored let telemetry: TelemetryTrack?
 
     init(
         event: TeslaEvent,
         gridAngles: [CameraAngle],
         trim: TrimRange,
         defaultWatermark: ExportRequest.WatermarkPosition,
-        exportJob: ExportJob
+        exportJob: ExportJob,
+        telemetry: TelemetryTrack? = nil
     ) {
+        self.telemetry = telemetry
         self.event = event
         self.gridAngles = gridAngles
         self.trim = trim
@@ -53,7 +59,8 @@ final class ExportSheetViewModel: Identifiable {
         case .grid:    .gridCombined(angles: gridAngles)
         case .singles: .singlesPerAngle(angles: Array(selectedAngles))
         }
-        let request = ExportRequest(event: event, layout: layout, range: trim, watermarkPosition: watermarkPosition)
+        let request = ExportRequest(event: event, layout: layout, range: trim, watermarkPosition: watermarkPosition,
+                                    telemetry: (burnTelemetry && hasTelemetry) ? telemetry : nil)
         do {
             let result = try await exportJob.run(request)
             resultURLs = result.outputURLs

@@ -21,7 +21,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 position: request.watermarkPosition,
                 layoutKind: .single,
                 eventStart: request.event.startTime,
-                rangeStart: request.range.start
+                rangeStart: request.range.start,
+                telemetry: request.telemetry
             ),
             to: url,
             progress: progress
@@ -59,7 +60,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 position: request.watermarkPosition,
                 layoutKind: .grid(angles: angles),
                 eventStart: request.event.startTime,
-                rangeStart: request.range.start
+                rangeStart: request.range.start,
+                telemetry: request.telemetry
             ),
             to: url,
             progress: progress
@@ -251,6 +253,7 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         let layoutKind: LayoutKind
         let eventStart: Date
         let rangeStart: CMTime
+        var telemetry: TelemetryTrack? = nil
     }
 
     private func runExport(
@@ -369,6 +372,68 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
             textLayer.add(anim, forKey: "show")
 
             parent.addSublayer(textLayer)
+        }
+
+        // ── Telemetry line (speed / gear / G), one layer per 0.5 s ──
+        if let track = info.telemetry, !track.isEmpty, totalDur > 0 {
+            let fs: CGFloat = max(24, renderSize.width * 0.018)
+            let h = fs + 8
+            let pad: CGFloat = 20
+            let w = min(renderSize.width - 2 * pad, fs * 22)
+            // Opposite vertical edge from the timestamp so they never overlap.
+            let atTop: Bool = {
+                switch info.position {
+                case .bottomLeft, .bottomRight: return true
+                case .topLeft, .topRight: return false
+                }
+            }()
+            let alignLeft: Bool = {
+                switch info.position {
+                case .bottomLeft, .topLeft: return true
+                case .bottomRight, .topRight: return false
+                }
+            }()
+            let frame = CGRect(x: alignLeft ? pad : renderSize.width - w - pad,
+                               y: atTop ? renderSize.height - h - pad : pad,
+                               width: w, height: h)
+            let step = 0.5
+            let count = min(2400, Int((totalDur / step).rounded(.up)))
+            var lastText: String?
+            var runStart = 0
+            func emit(_ text: String, from a: Int, to b: Int) {
+                let l = CATextLayer()
+                l.string = text
+                l.font = CTFontCreateWithName("Helvetica-Bold" as CFString, fs, nil)
+                l.fontSize = fs
+                l.foregroundColor = UIColor.white.cgColor
+                l.shadowColor = UIColor.black.cgColor
+                l.shadowOpacity = 0.9
+                l.shadowRadius = 3
+                l.alignmentMode = alignLeft ? .left : .right
+                l.contentsScale = scale
+                l.frame = frame
+                l.opacity = 0
+                let t0 = min(1.0, Double(a) * step / totalDur)
+                let t1 = min(1.0, Double(b) * step / totalDur)
+                let anim = CAKeyframeAnimation(keyPath: "opacity")
+                anim.values = [0, 1, 0, 0] as [NSNumber]
+                anim.keyTimes = [0, NSNumber(value: t0), NSNumber(value: t1), 1]
+                anim.duration = max(1, totalDur)
+                anim.calculationMode = .discrete
+                anim.isRemovedOnCompletion = false
+                anim.beginTime = AVCoreAnimationBeginTimeAtZero
+                l.add(anim, forKey: "show")
+                parent.addSublayer(l)
+            }
+            for k in 0..<max(1, count) {
+                let t = info.rangeStart.seconds + Double(k) * step
+                let text = track.sample(at: t).map { TelemetryTrack.overlayLine($0) } ?? ""
+                if text != lastText {
+                    if let lt = lastText, !lt.isEmpty { emit(lt, from: runStart, to: k) }
+                    lastText = text; runStart = k
+                }
+            }
+            if let lt = lastText, !lt.isEmpty { emit(lt, from: runStart, to: max(1, count)) }
         }
 
         // ── Per-cell angle labels (grid mode only) ──

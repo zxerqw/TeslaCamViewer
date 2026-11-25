@@ -36,6 +36,11 @@ struct ExportSheetView: View {
                             Text("右上").tag(ExportRequest.WatermarkPosition.topRight)
                         }
                     }
+                    if viewModel.hasTelemetry {
+                        Section("叠加") {
+                            Toggle("车速 / G 值写入视频", isOn: $viewModel.burnTelemetry)
+                        }
+                    }
                     if viewModel.isRunning {
                         Section {
                             VStack(alignment: .leading, spacing: 8) {

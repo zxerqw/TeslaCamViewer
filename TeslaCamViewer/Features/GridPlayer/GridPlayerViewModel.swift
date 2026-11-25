@@ -27,6 +27,10 @@ final class GridPlayerViewModel {
         }
     }
     var watermarkPosition: ExportRequest.WatermarkPosition
+    /// Speed / G-force telemetry decoded from the clips' SEI (nil until loaded,
+    /// empty when the footage carries none, e.g. parked Sentry clips).
+    var telemetry: TelemetryTrack?
+    var showTelemetry = true
 
     init(event: TeslaEvent, playback: PlaybackController, defaultWatermark: ExportRequest.WatermarkPosition = .bottomLeft) {
         self.event = event
@@ -39,6 +43,33 @@ final class GridPlayerViewModel {
         // grid cells to any angle (including B-pillar) without a reload.
         let allAvailable = Array(event.availableAngles)
         try? await playback.load(event: event, angles: allAvailable)
+    }
+
+    func loadTelemetry() async {
+        let track = await TelemetryLoader.load(
+            event: event,
+            segmentStartTimes: playback.segmentStartTimes,
+            totalDuration: playback.totalDuration
+        )
+        telemetry = track
+    }
+
+    /// Camera that fired this Sentry event, if known and recorded.
+    var sentryTriggerAngle: CameraAngle? {
+        guard event.type == .sentry,
+              let a = event.eventMetadata?.triggerAngle,
+              event.availableAngles.contains(a) else { return nil }
+        return a
+    }
+
+    /// Exact trigger moment on the timeline (no lead-in).
+    var sentryTriggerTime: CMTime? {
+        SentryEventLocator.eventTime(
+            for: event,
+            segmentStartTimes: playback.segmentStartTimes,
+            totalDuration: playback.totalDuration,
+            leadSeconds: 0
+        )
     }
 
     func setAngle(_ angle: CameraAngle, at index: Int) {
