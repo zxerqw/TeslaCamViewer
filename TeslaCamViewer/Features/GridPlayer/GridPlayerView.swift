@@ -172,13 +172,28 @@ struct GridPlayerView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { focusedAngle = nil }
             } else {
+                // Real row/column layout: every cell owns a distinct layout
+                // frame, so its tap gesture fires only for taps inside that
+                // cell. (Previously the cells were absolutely positioned with
+                // .position() inside a ZStack, which sizes itself to a single
+                // cell — the cells shared one layout slot and taps landed on
+                // the wrong cell, enlarging the previously focused camera
+                // instead of the one actually tapped.)
                 let angles = viewModel.gridAngles
                 let cols = CameraAngle.gridColumns(forCount: angles.count)
+                let rows = 2
                 let cellW = geo.size.width / CGFloat(cols)
-                let cellH = geo.size.height / 2
-                ZStack {
-                    ForEach(Array(angles.enumerated()), id: \.offset) { idx, angle in
-                        cell(for: angle, index: idx, columns: cols, size: CGSize(width: cellW, height: cellH))
+                let cellH = geo.size.height / CGFloat(rows)
+                VStack(spacing: 0) {
+                    ForEach(0..<rows, id: \.self) { row in
+                        HStack(spacing: 0) {
+                            ForEach(0..<cols, id: \.self) { col in
+                                let idx = row * cols + col
+                                if idx < angles.count {
+                                    cell(for: angles[idx], index: idx, columns: cols, size: CGSize(width: cellW, height: cellH))
+                                }
+                            }
+                        }
                     }
                 }
                 .overlay { watermarkOverlay(size: geo.size) }
@@ -221,8 +236,6 @@ struct GridPlayerView: View {
                 .cornerRadius(4)
                 .padding(4)
         }
-        .position(x: CGFloat(col) * size.width + size.width / 2,
-                  y: CGFloat(row) * size.height + size.height / 2)
         .contentShape(Rectangle())
         .onTapGesture { focusedAngle = angle }
     }
