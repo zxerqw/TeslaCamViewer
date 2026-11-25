@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "6"
     ENABLE_USER_SCRIPT_SANDBOXING: NO  # xcodegen emits run-script phases that write into DerivedData
     SWIFT_STRICT_CONCURRENCY: complete
     # Code signing — applies to all targets. Team ID is public (visible in any
@@ -44,6 +44,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: me.melkor.TeslaCamViewer
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
   TeslaCamViewerTests:
     type: bundle.unit-test

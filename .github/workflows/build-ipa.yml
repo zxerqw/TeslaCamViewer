@@ -1,0 +1,62 @@
+# TeslaCamViewer IPA build (GitHub Actions, macOS runner)
+# Produces two IPAs:
+#   - TeslaCamViewer-trollstore.ipa: fakesigned with ldid using
+#     TeslaCamViewer/TrollStore.entitlements (application-identifier +
+#     team-identifier). Install with TrollStore. Without these entitlements the
+#     system folder picker's "Open" button does nothing under TrollStore.
+#   - TeslaCamViewer-unsigned.ipa: no signature, for Sideloadly / AltStore.
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/build-ipa.yml", "project.yml", "TeslaCamViewer/**"]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build unsigned archive
+        run: |
+          xcodebuild -project TeslaCamViewer.xcodeproj \
+            -scheme TeslaCamViewer \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/TeslaCamViewer.xcarchive \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM= \
+            archive
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R "build/TeslaCamViewer.xcarchive/Products/Applications/TeslaCamViewer.app" Payload/
+          zip -r TeslaCamViewer-unsigned.ipa Payload
+
+      - name: Package TrollStore IPA (ldid fakesign with entitlements)
+        run: |
+          brew install ldid
+          rm -rf ts && mkdir -p ts/Payload
+          cp -R "build/TeslaCamViewer.xcarchive/Products/Applications/TeslaCamViewer.app" ts/Payload/
+          ldid -STeslaCamViewer/TrollStore.entitlements ts/Payload/TeslaCamViewer.app/TeslaCamViewer
+          echo "--- embedded entitlements:"
+          ldid -e ts/Payload/TeslaCamViewer.app/TeslaCamViewer
+          (cd ts && zip -r ../TeslaCamViewer-trollstore.ipa Payload)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TeslaCamViewer-unsigned-ipa
+          path: |
+            TeslaCamViewer-unsigned.ipa
+            TeslaCamViewer-trollstore.ipa
+          retention-days: 7

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RootView: View {
     let deps: AppDependencies
@@ -25,9 +26,12 @@ struct RootView: View {
                         SettingsView(settingsStore: deps.settings, onReselectFolder: reselectFolder)
                     }
                 }
-                .sheet(isPresented: $isPickingFolder) {
-                    FolderPickerView { url in
-                        isPickingFolder = false
+                .fileImporter(
+                    isPresented: $isPickingFolder,
+                    allowedContentTypes: [.folder],
+                    allowsMultipleSelection: false
+                ) { result in
+                    if case .success(let urls) = result, let url = urls.first {
                         Task { await onPickedFolder(url) }
                     }
                 }
