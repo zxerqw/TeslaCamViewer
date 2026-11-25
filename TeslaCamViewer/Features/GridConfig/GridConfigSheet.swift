@@ -10,7 +10,7 @@ struct GridConfigSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(0..<4, id: \.self) { idx in
+                ForEach(0..<current.count, id: \.self) { idx in
                     Section(header: Text("格 \(idx + 1)")) {
                         ForEach(allAngles, id: \.self) { angle in
                             HStack {

@@ -30,4 +30,16 @@ public enum CameraAngle: String, CaseIterable, Codable, Hashable {
     public static let defaultGrid: [CameraAngle] = [
         .front, .back, .leftRepeater, .rightRepeater
     ]
+
+    /// The 6-camera grid (3 columns × 2 rows): pillars flank the front camera
+    /// on top, repeaters flank the rear camera below.
+    public static let sixGrid: [CameraAngle] = [
+        .leftPillar, .front, .rightPillar,
+        .leftRepeater, .back, .rightRepeater
+    ]
+
+    /// Number of grid columns for a grid of `count` cells (2 rows always).
+    public static func gridColumns(forCount count: Int) -> Int {
+        count > 4 ? 3 : 2
+    }
 }

@@ -20,6 +20,7 @@ struct GridPlayerView: View {
                     // Controls area on the right in landscape
                     VStack(spacing: 8) {
                         controls
+                        layoutPicker
                         watermarkPicker
                         TrimBarView(
                             totalDuration: viewModel.playback.totalDuration,
@@ -47,6 +48,7 @@ struct GridPlayerView: View {
                     // Controls area with dark background for visibility in light mode
                     VStack(spacing: 8) {
                         controls
+                        layoutPicker
                         watermarkPicker
                         TrimBarView(
                             totalDuration: viewModel.playback.totalDuration,
@@ -74,6 +76,20 @@ struct GridPlayerView: View {
             trimStart = .zero
             trimEnd = newTotal
         }
+    }
+
+    // MARK: - Grid layout picker (4 / 6 cameras)
+
+    private var layoutPicker: some View {
+        Picker("画面", selection: $viewModel.gridLayout) {
+            ForEach(GridPlayerViewModel.GridLayout.allCases) { l in
+                Text(l.label).tag(l)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 8)
+        .onChange(of: viewModel.gridLayout) { _, _ in focusedAngle = nil }
     }
 
     // MARK: - Watermark picker
@@ -150,11 +166,13 @@ struct GridPlayerView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { focusedAngle = nil }
             } else {
-                let cellW = geo.size.width / 2
+                let angles = viewModel.gridAngles
+                let cols = CameraAngle.gridColumns(forCount: angles.count)
+                let cellW = geo.size.width / CGFloat(cols)
                 let cellH = geo.size.height / 2
                 ZStack {
-                    ForEach(Array(viewModel.gridAngles.enumerated()), id: \.offset) { idx, angle in
-                        cell(for: angle, index: idx, size: CGSize(width: cellW, height: cellH))
+                    ForEach(Array(angles.enumerated()), id: \.offset) { idx, angle in
+                        cell(for: angle, index: idx, columns: cols, size: CGSize(width: cellW, height: cellH))
                     }
                 }
                 .overlay { watermarkOverlay(size: geo.size) }
@@ -165,19 +183,20 @@ struct GridPlayerView: View {
     }
 
     @ViewBuilder
-    private func cell(for angle: CameraAngle, index: Int, size: CGSize) -> some View {
-        let row = index / 2, col = index % 2
+    private func cell(for angle: CameraAngle, index: Int, columns: Int, size: CGSize) -> some View {
+        let row = index / columns, col = index % columns
         // Place angle labels toward the center of the grid to avoid watermark overlap:
         //   cell 0 (top-left)     → label at bottom-right of cell
         //   cell 1 (top-right)    → label at bottom-left of cell
         //   cell 2 (bottom-left)  → label at top-right of cell
         //   cell 3 (bottom-right) → label at top-left of cell
-        let labelAlignment: Alignment = switch index {
-        case 0: .bottomTrailing
-        case 1: .bottomLeading
-        case 2: .topTrailing
-        default: .topLeading
-        }
+        //   (6-camera grid: middle column → label at bottom/top center)
+        let labelAlignment: Alignment = {
+            let top = row == 0
+            if col == 0 { return top ? .bottomTrailing : .topTrailing }
+            if col == columns - 1 { return top ? .bottomLeading : .topLeading }
+            return top ? .bottom : .top
+        }()
         Group {
             if viewModel.event.availableAngles.contains(angle),
                let player = viewModel.playback.player(for: angle) {
@@ -232,7 +251,10 @@ struct GridPlayerView: View {
             }
             if let sentryTime = sentryEventTime {
                 Button {
-                    Task { try? await viewModel.playback.seek(to: sentryTime) }
+                    Task {
+                        try? await viewModel.playback.seek(to: sentryTime)
+                        viewModel.playback.play()
+                    }
                 } label: {
                     VStack(spacing: 1) {
                         Image(systemName: "exclamationmark.shield.fill")

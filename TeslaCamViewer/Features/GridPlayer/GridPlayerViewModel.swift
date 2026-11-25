@@ -8,13 +8,29 @@ import AVFoundation
 final class GridPlayerViewModel {
     let event: TeslaEvent
     let playback: PlaybackController
-    var gridAngles: [CameraAngle]
+    enum GridLayout: Int, CaseIterable, Identifiable {
+        case four = 4, six = 6
+        var id: Int { rawValue }
+        var label: String { self == .four ? "四画面" : "六画面" }
+    }
+
+    var gridLayout: GridLayout = .four
+    private var fourAngles: [CameraAngle] = CameraAngle.defaultGrid
+    private var sixAngles: [CameraAngle] = CameraAngle.sixGrid
+
+    /// Angles of the currently selected layout (4 or 6 cells). Each layout
+    /// keeps its own cell assignments when switching back and forth.
+    var gridAngles: [CameraAngle] {
+        get { gridLayout == .four ? fourAngles : sixAngles }
+        set {
+            if gridLayout == .four { fourAngles = newValue } else { sixAngles = newValue }
+        }
+    }
     var watermarkPosition: ExportRequest.WatermarkPosition
 
     init(event: TeslaEvent, playback: PlaybackController, defaultWatermark: ExportRequest.WatermarkPosition = .bottomLeft) {
         self.event = event
         self.playback = playback
-        self.gridAngles = CameraAngle.defaultGrid
         self.watermarkPosition = defaultWatermark
     }
 

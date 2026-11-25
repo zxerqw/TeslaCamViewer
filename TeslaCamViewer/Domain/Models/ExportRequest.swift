@@ -9,7 +9,7 @@ public struct ExportRequest {
         public var isValid: Bool {
             switch self {
             case .singlesPerAngle(let angles): return !angles.isEmpty
-            case .gridCombined(let angles):    return angles.count == 4
+            case .gridCombined(let angles):    return angles.count == 4 || angles.count == 6
             }
         }
 

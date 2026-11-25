@@ -31,16 +31,17 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
     // MARK: Grid
 
     public func exportGrid(request: ExportRequest, to url: URL, progress: @escaping @Sendable (Float) -> Void) async throws {
-        guard case .gridCombined(let angles) = request.layout, angles.count == 4 else {
+        guard case .gridCombined(let angles) = request.layout, angles.count == 4 || angles.count == 6 else {
             throw AppError.exportFailed(underlying: NSError(
                 domain: "AVComposer", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "gridCombined requires exactly 4 angles"]
+                userInfo: [NSLocalizedDescriptionKey: "gridCombined requires 4 or 6 angles"]
             ))
         }
         // Detect native video size from the first available angle to avoid black bars.
         // Cap grid render size to max 1920 width to ensure smooth playback.
         let info = await detectNativeVideoInfo(event: request.event, angles: angles)
-        let rawW = info.size.width * 2
+        let cols = CameraAngle.gridColumns(forCount: angles.count)
+        let rawW = info.size.width * CGFloat(cols)
         let rawH = info.size.height * 2
         let maxWidth: CGFloat = 1920
         let scaleFactor = rawW > maxWidth ? maxWidth / rawW : 1.0
@@ -161,7 +162,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         frameDuration: CMTime = CMTime(value: 1, timescale: 36)
     ) async throws -> (AVMutableComposition, AVMutableVideoComposition) {
         let comp = AVMutableComposition()
-        let cellW = renderSize.width / 2
+        let cols = CameraAngle.gridColumns(forCount: angles.count)
+        let cellW = renderSize.width / CGFloat(cols)
         let cellH = renderSize.height / 2
         let trimDuration = request.range.end - request.range.start
 
@@ -215,7 +217,7 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
             // T(offset) * S(scale) means "scale at origin, then move into place".
             let scaleF = min(cellW / nativeSize.width, cellH / nativeSize.height)
             let scaled = CGSize(width: nativeSize.width * scaleF, height: nativeSize.height * scaleF)
-            let row = idx / 2, col = idx % 2   // 0=TL, 1=TR, 2=BL, 3=BR
+            let row = idx / cols, col = idx % cols   // row-major, 2 rows
             let cellX = CGFloat(col) * cellW
             let cellY = CGFloat(row) * cellH
             let offsetX = cellX + (cellW - scaled.width) / 2
@@ -378,7 +380,8 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
         //   cell 2 (BL) → top-right of cell
         //   cell 3 (BR) → top-left of cell
         if case .grid(let angles) = info.layoutKind {
-            let cellW = renderSize.width / 2
+            let cols = CameraAngle.gridColumns(forCount: angles.count)
+            let cellW = renderSize.width / CGFloat(cols)
             let cellH = renderSize.height / 2
             let labelFontSize: CGFloat = max(28, renderSize.width * 0.018)
             let labelH: CGFloat = labelFontSize + 8
@@ -394,19 +397,24 @@ public final class AVComposer: ComposerProtocol, @unchecked Sendable {
                 label.shadowRadius = 3
                 label.contentsScale = scale
 
-                let row = idx / 2, col = idx % 2
+                let row = idx / cols, col = idx % cols
                 let labelW: CGFloat = 200
+                let cellX = CGFloat(col) * cellW
 
                 // X position: cell 0,2 (left col) → right side; cell 1,3 (right col) → left side
                 let x: CGFloat
                 if col == 0 {
                     // Left column → label on right side of cell (toward center)
-                    x = cellW - labelW - labelPad
+                    x = cellX + cellW - labelW - labelPad
                     label.alignmentMode = .right
-                } else {
+                } else if col == cols - 1 {
                     // Right column → label on left side of cell (toward center)
-                    x = cellW + labelPad
+                    x = cellX + labelPad
                     label.alignmentMode = .left
+                } else {
+                    // Middle column (6-camera grid) → centered in cell
+                    x = cellX + (cellW - labelW) / 2
+                    label.alignmentMode = .center
                 }
 
                 // Y position (CA coords: Y=0 bottom, Y=height top):

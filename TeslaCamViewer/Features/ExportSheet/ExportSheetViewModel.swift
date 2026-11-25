@@ -9,7 +9,7 @@ final class ExportSheetViewModel: Identifiable {
     enum Mode: String, CaseIterable, Identifiable {
         case grid, singles
         var id: String { rawValue }
-        var label: String { self == .grid ? "四宫格合成" : "多视角独立" }
+        var label: String { self == .grid ? "宫格合成" : "多视角独立" }
     }
 
     var mode: Mode = .grid
