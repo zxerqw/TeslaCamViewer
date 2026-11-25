@@ -73,10 +73,8 @@ struct GridPlayerView: View {
         }
         .task {
             await viewModel.load()
-            // Sentry: open zoomed in on the camera that fired the event.
-            if focusedAngle == nil, let a = viewModel.sentryTriggerAngle {
-                focusedAngle = a
-            }
+            // Open in the grid (default 四画面): do not auto-zoom to the
+            // trigger camera on open — the 哨兵 button only seeks.
             await viewModel.loadTelemetry()
         }
         .onChange(of: viewModel.playback.totalDuration) { _, newTotal in
@@ -261,7 +259,12 @@ struct GridPlayerView: View {
             if let sentryTime = sentryEventTime {
                 Button {
                     Task {
-                        if let a = viewModel.sentryTriggerAngle { focusedAngle = a }
+                        // Keep the current layout: only re-aim at the trigger
+                        // camera when already watching a single camera.
+                        // In 4/6 grid mode the grid stays as-is.
+                        if focusedAngle != nil, let a = viewModel.sentryTriggerAngle {
+                            focusedAngle = a
+                        }
                         try? await viewModel.playback.seek(to: sentryTime)
                         viewModel.playback.play()
                     }
